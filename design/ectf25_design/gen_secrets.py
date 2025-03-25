@@ -1,119 +1,102 @@
-#!/usr/bin/env python3
 """
-gen_secrets.py
----------------
-Genera el archivo de secretos (Global Secrets, GS) para el sistema.
-El archivo contendrá lo siguiente:
-  - "channels": la lista de canales válidos.
-  - "channel_keys": una clave específica de 256 bits (32 bytes) generada aleatoriamente para cada canal.
-  - "KMAC": una clave de autenticación de 16 bytes.
-  - "partial_keys": claves parciales (simulación de TSS) para cada decodificador, generadas aleatoriamente (en este ejemplo, 16 bytes cada una).
+Author: Ben Janis
+Date: 2025
 
-El output se usará en otros módulos; en particular, la suscripción se generará usando la clave específica del canal (K_CHANNEL_ID) y el HMAC se calculará con KMAC.
-El formato final de GS, según lo solicitado, es:
-  {K1 || K2 || K3 || KMAC}
-  (aquí "K1", "K2", "K3" corresponden a las claves de cada canal).
+This source file is part of an example system for MITRE's 2025 Embedded System CTF
+(eCTF). This code is being provided only for educational purposes for the 2025 MITRE
+eCTF competition, and may not meet MITRE standards for quality. Use this code at your
+own risk!
 
-Instrucciones de ejecución:
-  Ejemplo de uso:
-    python gen_secrets.py secrets.json 1 2 3 4
-
-  Donde:
-    - "secrets.json" es el archivo de salida que se creará.
-    - Los siguientes números (1 2 3) son los canales válidos (excluyendo el canal 0).
-    - El último número (4) es el número de decodificadores para los cuales se generarán las claves parciales.
+Copyright: Copyright (c) 2025 The MITRE Corporation
 """
 
 import argparse
 import json
-import os
-import base64
-from typing import List
+from pathlib import Path
 
-def derive_cmac(key: bytes, data: bytes) -> bytes:
+from loguru import logger
+
+
+def gen_secrets(channels: list[int]) -> bytes:
+    """Generate the contents secrets file
+
+    This will be passed to the Encoder, ectf25_design.gen_subscription, and the build
+    process of the decoder
+
+    :param channels: List of channel numbers that will be valid in this deployment.
+        Channel 0 is the emergency broadcast, which will always be valid and will
+        NOT be included in this list
+
+    :returns: Contents of the secrets file
     """
-    Calcula el MAC usando AES-CMAC.
-    Se utiliza para generar el HMAC en otros procesos.
-    """
-    from cryptography.hazmat.primitives.cmac import CMAC
-    from cryptography.hazmat.primitives.ciphers import algorithms
-    c = CMAC(algorithms.AES(key))
-    c.update(data)
-    return c.finalize()
+    # TODO: Update this function to generate any system-wide secrets needed by
+    #   your design
 
-def gen_secrets(channels: List[int], num_decoders: int = 8) -> bytes:
-    """
-    Genera el archivo de secretos con claves seguras para el sistema.
-
-    Parámetros:
-      - channels: lista de canales válidos (excluyendo canal 0).
-      - num_decoders: número de decodificadores para los cuales se generarán claves parciales (por defecto 8).
-
-    Salida:
-      - Un JSON codificado en bytes que contiene:
-          "channels": la lista de canales,
-          "channel_keys": un diccionario con claves específicas por canal (cada una de 256 bits, es decir, 32 bytes, codificadas en base64),
-          "KMAC": clave de autenticación (16 bytes, codificada en base64),
-          "partial_keys": un diccionario con claves parciales para cada decodificador (16 bytes, codificadas en base64).
-    """
-    # Generar KMAC de 16 bytes
-    KMAC = os.urandom(16)
-
-    # Generar claves específicas por canal: para cada canal de la lista, se genera un valor aleatorio de 32 bytes
-    channel_keys = {str(channel): base64.b64encode(os.urandom(32)).decode('utf-8') for channel in channels}
-
-    # Generar claves parciales para cada decodificador (simulación de TSS)
-    partial_keys = {f"decoder_{i}": base64.b64encode(os.urandom(16)).decode('utf-8') for i in range(1, num_decoders + 1)}
-
-    # Construir el diccionario de secretos
+    # Create the secrets object
+    # You can change this to generate any secret material
+    # The secrets file will never be shared with attackers
     secrets = {
         "channels": channels,
-        "channel_keys": channel_keys,
-        "KMAC": base64.b64encode(KMAC).decode('utf-8'),
-        "partial_keys": partial_keys
+        "some_secrets": "EXAMPLE",
     }
 
-    # Convertir a JSON y codificar en bytes
-    secrets_json = json.dumps(secrets, indent=2)
-    print(f"\n[gen_secrets] Final secrets JSON generated (total length = {len(secrets_json.encode('utf-8'))} bytes).\n")
-    return secrets_json.encode('utf-8')
+    # NOTE: if you choose to use JSON for your file type, you will not be able to
+    # store binary data, and must either use a different file type or encode the
+    # binary data to hex, base64, or another type of ASCII-only encoding
+    return json.dumps(secrets).encode()
+
 
 def parse_args():
-    """
-    Define y analiza los argumentos de línea de comandos.
-    
-    Uso:
-      python gen_secrets.py secrets_file channel1 channel2 ... [num_decoders]
+    """Define and parse the command line arguments
 
-    Ejemplo:
-      python gen_secrets.py secrets.json 1 2 3 4
-      (donde 1, 2 y 3 son los canales válidos y 4 es el número de decodificadores)
+    NOTE: Your design must not change this function
     """
-    parser = argparse.ArgumentParser(
-        description="Genera el archivo de secretos para el sistema."
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--force",
+        "-f",
+        action="store_true",
+        help="Force creation of secrets file, overwriting existing file",
     )
-    parser.add_argument("--force", "-f", action="store_true", help="Sobreescribir archivo de secretos existente.")
-    parser.add_argument("secrets_file", type=str, help="Ruta del archivo de secretos a crear.")
-    parser.add_argument("channels", nargs="+", type=int, help="Lista de canales válidos (excluyendo canal 0).")
-    parser.add_argument("num_decoders", nargs="?", type=int, default=8, help="Número de decodificadores a generar (por defecto 8).")
+    parser.add_argument(
+        "secrets_file",
+        type=Path,
+        help="Path to the secrets file to be created",
+    )
+    parser.add_argument(
+        "channels",
+        nargs="+",
+        type=int,
+        help="Supported channels. Channel 0 (broadcast) is always valid and will not"
+        " be provided in this list",
+    )
     return parser.parse_args()
 
+
 def main():
+    """Main function of gen_secrets
+
+    You will likely not have to change this function
     """
-    Función principal.
-    Lee los argumentos, genera los secretos y escribe el archivo de salida.
-    """
+    # Parse the command line arguments
     args = parse_args()
 
-    # Si no se pasa el número de decoders
-    if len(args.num_decoders) == 0:
-        args.num_decoders = 8
-        
-    secrets_data = gen_secrets(args.channels, args.num_decoders)
-    mode = "wb" if args.force else "xb"
-    with open(args.secrets_file, mode) as f:
-        f.write(secrets_data)
-    print(f"\n[gen_secrets] Archivo de secretos generado en {args.secrets_file}\n")
+    secrets = gen_secrets(args.channels)
+
+    # Print the generated secrets for your own debugging
+    # Attackers will NOT have access to the output of this, but feel free to remove
+    #
+    # NOTE: Printing sensitive data is generally not good security practice
+    logger.debug(f"Generated secrets: {secrets}")
+
+    # Open the file, erroring if the file exists unless the --force arg is provided
+    with open(args.secrets_file, "wb" if args.force else "xb") as f:
+        # Dump the secrets to the file
+        f.write(secrets)
+
+    # For your own debugging. Feel free to remove
+    logger.success(f"Wrote secrets to {str(args.secrets_file.absolute())}")
+
 
 if __name__ == "__main__":
     main()
