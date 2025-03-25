@@ -2,16 +2,12 @@
 """
 gen_secrets.py
 ---------------
-Genera el archivo de secretos (Global Secrets, GS) para el sistema seguro.
-
+Genera el archivo de secretos para el sistema seguro.
 El archivo contendrá:
-  - "channels": la lista de canales válidos.
-  - "channel_keys": para cada canal se genera una clave aleatoria de 32 bytes (codificada en base64).
-  - "KMAC": una clave aleatoria de 16 bytes (codificada en base64).
-  - "partial_keys": un diccionario de claves aleatorias de 16 bytes (codificadas en base64) para cada decodificador.
-
-Uso:
-  python gen_secrets.py secrets.json <channel1> <channel2> ... [num_decoders]
+  - "channels": Lista de canales válidos.
+  - "channel_keys": Para cada canal se genera una clave aleatoria de 32 bytes (codificada en base64).
+  - "KMAC": Clave aleatoria de 16 bytes (codificada en base64).
+  - "partial_keys": Diccionario de claves aleatorias de 16 bytes para cada decodificador.
 """
 
 import argparse
