@@ -32,10 +32,9 @@
 
 #include "wolfssl/options.h"
 #include <wolfssl/wolfcrypt/aes.h>
-#include <wolfssl/wolfcrypt/base64.h>
+// Se elimina la inclusión de <wolfssl/wolfcrypt/base64.h>
 
-/* Incluimos cJSON para parsear el JSON de secretos.
-   Asegúrate de tener cJSON en el entorno. */
+// Incluimos cJSON para parsear el JSON de secretos.
 #include "cJSON.h"
 
 /**********************************************************
@@ -123,7 +122,6 @@ static cJSON *global_secrets = NULL;
 /**********************************************************
  ****************** LOAD SECURE KEYS ************************
  **********************************************************/
-
 // Function to load the secure keys from the global secrets JSON file.
 // The file is expected at the relative path "../design/ectf25_design/global_secrets/secrets.json"
 int load_secure_keys(void) {
@@ -166,13 +164,37 @@ int load_secure_keys(void) {
 /**********************************************************
  ****************** BASE64 HELPER FUNCTION ******************
  **********************************************************/
-// Usa la función Base64_Decode() de WolfSSL para decodificar.
-int decode_base64(const char* in, uint8_t *out, int out_size) {
-    int out_len = Base64_Decode(out, out_size, (const unsigned char*)in, (int)strlen(in));
-    if (out_len < 0) {
-        return -1;
+// Implementación sencilla de decodificación Base64 (no optimizada)
+static const char b64_table[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+static int decode_base64(const char* in, uint8_t *out, int out_size) {
+    int in_len = (int)strlen(in);
+    int i = 0, j = 0;
+    int pad = 0;
+    // Contar padding
+    if (in_len >= 2) {
+        if (in[in_len-1] == '=') pad++;
+        if (in[in_len-2] == '=') pad++;
     }
-    return out_len;
+    int out_len = (in_len * 3) / 4 - pad;
+    if (out_len > out_size) return -1;
+
+    uint32_t buffer = 0;
+    int bits_collected = 0;
+    for (i = 0; i < in_len; i++) {
+        char c = in[i];
+        if (c == '=' || c == '\n' || c == '\r' || c == ' ')
+            break;
+        const char *p = strchr(b64_table, c);
+        if (!p) continue;
+        buffer = (buffer << 6) | (p - b64_table);
+        bits_collected += 6;
+        if (bits_collected >= 8) {
+            bits_collected -= 8;
+            if (j < out_size)
+                out[j++] = (uint8_t)((buffer >> bits_collected) & 0xFF);
+        }
+    }
+    return j;
 }
 
 /**********************************************************
@@ -276,7 +298,7 @@ static void aes_ctr_xcrypt(const uint8_t* key, int keyLen, const uint8_t* nonce,
     if (rem > 0) {
         wc_AesEncryptDirect(&aes, keystream, counter);
         for (size_t j = 0; j < rem; j++) {
-            buffer[blocks * 16 + j] ^= keystream[j];
+            buffer[blocks*16 + j] ^= keystream[j];
         }
     }
 }
@@ -449,7 +471,7 @@ void init(void) {
             subscription[i].end_timestamp = DEFAULT_CHANNEL_TIMESTAMP;
             subscription[i].active = false;
         }
-        memcpy(decoder_status.subscribed_channels, subscription, MAX_CHANNEL_COUNT * sizeof(channel_status_t));
+        memcpy(decoder_status.subscribed_channels, subscription, MAX_CHANNEL_COUNT*sizeof(channel_status_t));
         flash_simple_erase_page(FLASH_STATUS_ADDR);
         flash_simple_write(FLASH_STATUS_ADDR, &decoder_status, sizeof(flash_entry_t));
     }
@@ -464,8 +486,7 @@ void init(void) {
         print_error("Error al cargar el archivo de secretos\n");
         while (1);
     }
-    // Set g_channel_key by default using the JSON for channel "1" (o el que se considere por defecto).
-    // Aquí se puede elegir la clave de un canal por defecto. En _get_channel_key se volverá a buscar.
+    // Set g_channel_key using the JSON for channel "1" (or default channel)
     {
         cJSON *ck = cJSON_GetObjectItem(global_secrets, "channel_keys");
         if (ck) {
