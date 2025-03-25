@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """
 gen_secrets.py
---------------
-Genera el archivo de secretos (Global Secrets) para el sistema seguro.
+---------------
+Genera el archivo de secretos (Global Secrets, GS) para el sistema seguro.
 
 El archivo contendrá:
   - "channels": la lista de canales válidos.
   - "channel_keys": para cada canal se genera una clave aleatoria de 32 bytes (codificada en base64).
   - "KMAC": una clave aleatoria de 16 bytes (codificada en base64).
+  - "partial_keys": un diccionario de claves aleatorias de 16 bytes (codificadas en base64) para cada decodificador.
 
 Uso:
   python gen_secrets.py secrets.json <channel1> <channel2> ... [num_decoders]
-  (En este diseño, num_decoders se puede omitir; solo se usan "channel_keys" y "KMAC")
 """
 
 import argparse
@@ -21,18 +21,20 @@ import base64
 from typing import List
 
 def gen_secrets(channels: List[int], num_decoders: int = 8) -> bytes:
-    # En este ejemplo generamos solo las claves necesarias para el encoder/decoder:
     KMAC = os.urandom(16)
     channel_keys = {str(channel): base64.b64encode(os.urandom(32)).decode('utf-8')
                     for channel in channels}
+    partial_keys = {f"decoder_{i}": base64.b64encode(os.urandom(16)).decode('utf-8')
+                    for i in range(1, num_decoders + 1)}
     secrets = {
         "channels": channels,
         "channel_keys": channel_keys,
-        "KMAC": base64.b64encode(KMAC).decode('utf-8')
+        "KMAC": base64.b64encode(KMAC).decode('utf-8'),
+        "partial_keys": partial_keys
     }
     secrets_json = json.dumps(secrets, indent=2)
     print(f"\n[gen_secrets] Final secrets JSON generated (total length = {len(secrets_json.encode('utf-8'))} bytes).\n")
-    return secrets_json.encode()
+    return secrets_json.encode('utf-8')
 
 def parse_args():
     parser = argparse.ArgumentParser(
