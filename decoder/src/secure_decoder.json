@@ -1,10 +1,7 @@
 {
-   "channel_keys": {
-     "0": "JrsaJqOTBQUNW/DTxrt2oCRTBw6LhOvkdlEKovVk//4=",
-     "1": "ge2NrhB8A0UnU8+nDjm9M6l081SP2pLVVjsmfZK0JF4=",
-     "2": "TDDgmVojJLSUeS6LpfKa52i6K1/2MGMndHLEXQR/eWg=",
-     "3": "7JazBgIARUa5JkQcxN2VcIJgnDw1mRAFnQxZtopsfNo=",
-     "4": "iPlMDI8YiwaVRZZeMvRG4UBnsAj4CeNYu/XtsFNhRA8="
-  },
-   "KMAC": "7sCUG0JZIBZTxjAF80NbrA=="
- }
+          "channel_keys": {
+             "1": "JUgJfLSlbRDUfgKfqVBOYq1wYFRR9B/R7HFMUzLf3xY=",
+             "2": "cpjp3k/zO/6M7QyAMtZJDA1yO38mEf8VSsNBNx65kpA="
+          },
+          "KMAC": "n0TZs2ENPw2UfAnT0fsm8Q=="
+        }

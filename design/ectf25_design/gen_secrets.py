@@ -12,8 +12,10 @@ El archivo contendrá:
 
 import argparse
 import json
-import os
+from pathlib import Path
+from loguru import logger
 import base64
+import os
 from typing import List
 
 def gen_secrets(channels: List[int], num_decoders: int = 8) -> bytes:
@@ -29,27 +31,34 @@ def gen_secrets(channels: List[int], num_decoders: int = 8) -> bytes:
         "partial_keys": partial_keys
     }
     secrets_json = json.dumps(secrets, indent=2)
-    print(f"\n[gen_secrets] Final secrets JSON generated (total length = {len(secrets_json.encode('utf-8'))} bytes).\n")
-    return secrets_json.encode('utf-8')
+    logger.debug(f"Generated secrets (length={len(secrets_json.encode('utf-8'))} bytes):\n{secrets_json}")
+    return secrets_json.encode()
 
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Genera el archivo de secretos para el sistema seguro."
     )
     parser.add_argument("--force", "-f", action="store_true", help="Sobreescribir archivo de secretos existente.")
-    parser.add_argument("secrets_file", type=str, help="Ruta del archivo de secretos a crear.")
+    parser.add_argument("secrets_file", type=Path, help="Ruta del archivo de secretos a crear.")
     parser.add_argument("channels", nargs="+", type=int, help="Lista de canales válidos (excluyendo canal 0).")
-    parser.add_argument("num_decoders", nargs="?", type=int, default=8,
-                        help="Número de decodificadores (por defecto 8).")
     return parser.parse_args()
 
 def main():
     args = parse_args()
-    secrets_data = gen_secrets(args.channels, args.num_decoders)
+    secrets_data = gen_secrets(args.channels)
     mode = "wb" if args.force else "xb"
+    # Escribe en la ruta dada por el usuario...
     with open(args.secrets_file, mode) as f:
         f.write(secrets_data)
-    print(f"\n[gen_secrets] Archivo de secretos generado en {args.secrets_file}\n")
+    logger.success(f"Wrote secrets to {args.secrets_file.absolute()}")
+    # Y también copia (o escribe) en la ruta global /global.secrets
+    global_path = Path("/global.secrets")
+    try:
+        with open(global_path, "wb") as f_global:
+            f_global.write(secrets_data)
+        logger.success(f"Global secrets written to {global_path}")
+    except Exception as e:
+        logger.error(f"Error escribiendo global secrets en {global_path}: {e}")
 
 if __name__ == "__main__":
     main()
