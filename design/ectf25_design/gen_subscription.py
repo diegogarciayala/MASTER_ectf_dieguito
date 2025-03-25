@@ -4,16 +4,15 @@ gen_subscription.py
 -------------------
 Genera el código de suscripción para un decodificador usando la clave específica del canal.
 
-El código de suscripción se genera a partir de:
-  - CH_ID (4 bytes)
-  - DECODER_ID (4 bytes)
-  - TS_START (4 bytes) [timestamp de inicio, 32 bits]
-  - TS_END (4 bytes) [timestamp de expiración, 32 bits]
-  - 20 bytes de relleno (por ejemplo, ceros)
-  --> Total: 36 bytes de datos
-
-Luego se calcula un CMAC (16 bytes) usando la clave específica del canal (K_CHANNEL_ID)
-para obtener un código de suscripción final de 36+16 = 52 bytes.
+El formato de suscripción es:
+  - 36 bytes de datos:
+      * CH_ID (4 bytes)
+      * DECODER_ID (4 bytes)
+      * TS_START (4 bytes, 32 bits)
+      * TS_END (4 bytes, 32 bits)
+      * 20 bytes de relleno (por ejemplo, ceros)
+  - 16 bytes de CMAC calculados usando la clave del canal
+  => Total: 36 + 16 = 52 bytes
 
 Uso:
   python gen_subscription.py secrets.json subscription.bin <device_id> <start> <end> <channel>
@@ -26,7 +25,7 @@ import base64
 
 def derive_cmac(key: bytes, data: bytes) -> bytes:
     """
-    Calcula el CMAC usando AES-CMAC.
+    Calcula el CMAC usando AES-CMAC a través de la librería 'cryptography'.
     """
     from cryptography.hazmat.primitives.cmac import CMAC
     from cryptography.hazmat.primitives.ciphers import algorithms
@@ -48,16 +47,14 @@ def gen_subscription(secrets: bytes, device_id: int, start: int, end: int, chann
         raise ValueError(f"No se encontró la clave para el canal {channel} en GS.")
     channel_key = base64.b64decode(channel_key_b64)
     
-    # Empaquetar 36 bytes de datos:
     subs_data = struct.pack("<I I I I 20s",
                             channel & 0xffffffff,
                             device_id & 0xffffffff,
                             start & 0xffffffff,
                             end & 0xffffffff,
                             b'\x00'*20)
-    # Calcular CMAC de 16 bytes con la clave del canal
     mac_16 = derive_cmac(channel_key, subs_data)
-    subscription_code = subs_data + mac_16  # Total 36 + 16 = 52 bytes
+    subscription_code = subs_data + mac_16  # 36 + 16 = 52 bytes
     print(f"\n[gen_subscription] Subscription final (length = {len(subscription_code)} bytes): {subscription_code.hex()}\n")
     return subscription_code
 
