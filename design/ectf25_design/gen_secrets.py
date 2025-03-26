@@ -18,17 +18,24 @@ from Crypto.Cipher import AES
 from loguru import logger
 
 def derive_key(master_key: bytes, label: bytes) -> bytes:
+    # Ensure master_key and label are bytes
+    master_key = bytes(master_key)
+    label = bytes(label)
+    
+    # Create CMAC object
     cobj = CMAC.new(master_key, ciphermod=AES)
     cobj.update(label)
-    # Se obtiene el digest en hexadecimal y luego se convierte a bytes para evitar errores con bytearray.
-    digest_hex = cobj.hexdigest()
-    return binascii.unhexlify(digest_hex)
+    
+    # Get digest directly as bytes
+    return cobj.digest()
 
 def gen_secrets(channels: list[int]) -> bytes:
     # Genera una master key de 16 bytes
     master_key = os.urandom(16)
+    
     # Deriva K_mac con la etiqueta "MAC"
     K_mac = derive_key(master_key, b"MAC")
+    
     # Se incluye el canal 0 (emergencia) junto a los canales pasados
     all_channels = set(channels)
     all_channels.add(0)
@@ -37,6 +44,7 @@ def gen_secrets(channels: list[int]) -> bytes:
         # La etiqueta es "CHANNEL" seguido del canal en 4 bytes little endian
         label = b"CHANNEL" + ch.to_bytes(4, "little")
         keys[str(ch)] = binascii.hexlify(derive_key(master_key, label)).decode()
+    
     secrets = {
         "master_key": binascii.hexlify(master_key).decode(),
         "K_mac": binascii.hexlify(K_mac).decode(),
