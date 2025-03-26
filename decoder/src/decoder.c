@@ -494,22 +494,33 @@
   * @brief Process a decode command.
   *        Expects a 96-byte packet.
   */
- static int decode(pkt_len_t pkt_len, frame_packet_t *new_frame)
- {
-     uint8_t *decrypted_frame = NULL;
-     size_t decrypted_len = 0;
-     int ret = secure_process_packet(new_frame->data, PACKET_SIZE,
-                                     &decrypted_frame, &decrypted_len);
-     if (ret < 0) {
-         STATUS_LED_RED();
-         print_error("Decodificación falló\n");
-         return -1;
-     }
-     write_packet(DECODE_MSG, decrypted_frame, (uint16_t)decrypted_len);
-     free(decrypted_frame);
-     return 0;
- }
- 
+  int decode(pkt_len_t pkt_len, frame_packet_t *new_frame) {
+    char output_buf[128] = {0};
+    uint16_t frame_size;
+    channel_id_t channel;
+    frame_size = pkt_len - (sizeof(new_frame->channel) + sizeof(new_frame->timestamp));
+    channel = new_frame->channel;
+    print_debug("Checking subscription\n");
+    if (!is_subscribed(channel)) {
+        STATUS_LED_RED();
+        snprintf(output_buf, sizeof(output_buf), "Receiving unsubscribed channel data.  %u\n", channel);
+        print_error(output_buf);
+        return -1;
+    }
+    // Luego procede a decodificar el frame
+    uint8_t *decrypted_frame = NULL;
+    size_t decrypted_len = 0;
+    int ret = secure_process_packet(new_frame->data, PACKET_SIZE, &decrypted_frame, &decrypted_len);
+    if (ret < 0) {
+        STATUS_LED_RED();
+        print_error("Decodificación falló\n");
+        return -1;
+    }
+    write_packet(DECODE_MSG, decrypted_frame, (uint16_t)decrypted_len);
+    free(decrypted_frame);
+    return 0;
+}
+
  /**********************************************************
    *********************** INITIALIZATION *********************/
  static void init(void)

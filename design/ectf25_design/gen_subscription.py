@@ -28,9 +28,9 @@ def derive_cmac(key: bytes, data: bytes) -> bytes:
 
 def gen_subscription(secrets: bytes, device_id: int, start: int, end: int, channel: int) -> bytes:
     secrets_data = json.loads(secrets)
-    # Si el canal es 0 (emergency), usamos una clave fija.
+    # Si el canal es 0 (emergency), se usa una clave fija (32 bytes de 0xFF)
     if channel == 0:
-        channel_key = b'\xFF' * 32  # Clave fija para emergency
+        channel_key = b'\xFF' * 32
     else:
         channel_key_b64 = secrets_data.get("channel_keys", {}).get(str(channel))
         if channel_key_b64 is None:
@@ -43,7 +43,6 @@ def gen_subscription(secrets: bytes, device_id: int, start: int, end: int, chann
     subscription = subs_data + mac_16  # Total: 36 + 16 = 52 bytes.
     logger.debug(f"Generated subscription: {subscription.hex()}")
     return subscription
-
 
 def parse_args():
     parser = argparse.ArgumentParser(
