@@ -1,7 +1,8 @@
 /**
  * @file    decoder.c
  * @brief   Implementación segura del Decoder para eCTF.
- *          Se incorpora validación de HMAC (usando wolfSSL’s wc_AesCmac) y descifrado con AES-CTR.
+ *          Se incorpora validación de HMAC (para canales distintos de emergencia)
+ *          y descifrado con AES-CTR.
  * @date    2025
  *
  * NOTA: Las funciones de entrada/salida (read_packet, write_packet, print_debug, print_error, etc.)
@@ -10,11 +11,9 @@
 
 /* Incluir las opciones y la librería de CMAC de wolfSSL */
 #include <wolfssl/options.h>
-#include <wolfssl/wolfcrypt/cmac.h>
+#include <wolfssl/wolfcrypt/cmac.h>  /* Se espera que declare wc_AesCmac */
 
-
-
-/* Declaración de encrypt_sym para que el compilador lo reconozca.
+/* Declarar encrypt_sym para que el compilador lo reconozca.
    La firma debe coincidir con la definición en simple_crypto.h */
 int encrypt_sym(uint8_t *plaintext, size_t len, uint8_t *key, uint8_t *ciphertext);
 
@@ -32,7 +31,7 @@ int encrypt_sym(uint8_t *plaintext, size_t len, uint8_t *key, uint8_t *ciphertex
 #include "simple_uart.h"
 #include "simple_crypto.h"  /* Proporciona BLOCK_SIZE */
 
-/* No redefinimos AES_BLOCK_SIZE manualmente; se usa el definido en wolfSSL o en simple_crypto.h */
+/* No se redefine AES_BLOCK_SIZE; se usa el definido en simple_crypto.h o wolfSSL */
 
 /* Definiciones de FLASH_STATUS_ADDR (si no se definen en los headers del SDK) */
 #ifndef MXC_FLASH_MEM_BASE
@@ -64,6 +63,58 @@ uint8_t deobfuscate(uint32_t a, uint32_t b) {
 
 #ifdef CRYPTO_EXAMPLE
 void crypto_example(void) { }
+#endif
+
+/* Implementación mínima de wc_AesCmac (si wolfSSL no lo proporciona) */
+#ifndef WC_AESCMAC_DECLARED
+#define WC_AESCMAC_DECLARED
+#define AES_BLOCK_SIZE 16
+static void left_shift(const uint8_t *input, uint8_t *output) {
+    uint8_t overflow = 0;
+    for (int i = AES_BLOCK_SIZE - 1; i >= 0; i--) {
+        output[i] = (input[i] << 1) | overflow;
+        overflow = (input[i] & 0x80) ? 1 : 0;
+    }
+}
+static void xor_block(const uint8_t *a, const uint8_t *b, uint8_t *result) {
+    for (int i = 0; i < AES_BLOCK_SIZE; i++)
+        result[i] = a[i] ^ b[i];
+}
+int wc_AesCmac(const uint8_t *key, int keyLen, const uint8_t *data, int dataLen, uint8_t *out_mac) {
+    if (keyLen != AES_BLOCK_SIZE || !key || !data || !out_mac) return -1;
+    uint8_t L[AES_BLOCK_SIZE] = {0};
+    uint8_t K1[AES_BLOCK_SIZE] = {0};
+    uint8_t K2[AES_BLOCK_SIZE] = {0};
+    uint8_t zero[AES_BLOCK_SIZE] = {0};
+    encrypt_sym(zero, AES_BLOCK_SIZE, (uint8_t *)key, L);
+    left_shift(L, K1);
+    if (L[0] & 0x80)
+        K1[AES_BLOCK_SIZE - 1] ^= 0x87;
+    left_shift(K1, K2);
+    if (K1[0] & 0x80)
+        K2[AES_BLOCK_SIZE - 1] ^= 0x87;
+    int num_blocks = (dataLen + AES_BLOCK_SIZE - 1) / AES_BLOCK_SIZE;
+    uint8_t X[AES_BLOCK_SIZE] = {0}; /* Inicializado en cero */
+    uint8_t block[AES_BLOCK_SIZE] = {0};
+    for (int i = 0; i < num_blocks; i++) {
+        int offset = i * AES_BLOCK_SIZE;
+        int remaining = (dataLen - offset) < AES_BLOCK_SIZE ? (dataLen - offset) : AES_BLOCK_SIZE;
+        memset(block, 0, AES_BLOCK_SIZE);
+        memcpy(block, data + offset, remaining);
+        if (i == num_blocks - 1) {
+            if (remaining < AES_BLOCK_SIZE) {
+                block[remaining] = 0x80;
+                xor_block(block, K2, block);
+            } else {
+                xor_block(block, K1, block);
+            }
+        }
+        xor_block(X, block, X);
+        encrypt_sym(X, AES_BLOCK_SIZE, (uint8_t *)key, X);
+    }
+    memcpy(out_mac, X, AES_BLOCK_SIZE);
+    return 0;
+}
 #endif
 
 #pragma pack(push, 1)
@@ -108,8 +159,6 @@ typedef struct {
 flash_entry_t decoder_status;
 
 /* ------------------ FUNCIONES CRIPTOGRÁFICAS ------------------ */
-
-/* AES-CTR implementado con encrypt_sym(). Se utiliza el BLOCK_SIZE ya definido en simple_crypto.h */
 void aes_ctr_crypt(const uint8_t *key, const uint8_t *nonce, 
                    const uint8_t *in, uint8_t *out, uint32_t length) {
     uint8_t counter[BLOCK_SIZE];
@@ -129,8 +178,6 @@ void aes_ctr_crypt(const uint8_t *key, const uint8_t *nonce,
     }
 }
 
-/* Función de CMAC usando wolfSSL.
-   Se utiliza wc_AesCmac (ya sea la de wolfSSL o la implementada a continuación) */
 void aes_cmac(const uint8_t *key, const uint8_t *data, uint32_t data_len, uint8_t *out_mac) {
     if (wc_AesCmac(key, 16, data, data_len, out_mac) != 0) {
         memset(out_mac, 0, 16);
