@@ -12,11 +12,7 @@
 #include <wolfssl/options.h>
 #include <wolfssl/wolfcrypt/cmac.h>  /* Se espera que esto declare wc_AesCmac */
 
-/* Si aun no se declara wc_AesCmac, definimos un prototipo (o stub) para poder compilar.
-   Nota: En una implementación real, esta función debe provenir de wolfSSL */
-#ifndef WC_AESCMAC_DECLARED
-int wc_AesCmac(const uint8_t *key, int keyLen, const uint8_t *data, int dataLen, uint8_t *out_mac);
-#endif
+
 
 #include <stdio.h>
 #include <stdint.h>
@@ -52,6 +48,84 @@ int wc_AesCmac(const uint8_t *key, int keyLen, const uint8_t *data, int dataLen,
 #define FRAME_SIZE 64
 #define DEFAULT_CHANNEL_TIMESTAMP 0xFFFFFFFFFFFFFFFF
 #define FLASH_FIRST_BOOT 0xDEADBEEF
+
+
+#include <stdint.h>
+#include <string.h>
+
+// AES block size
+#define AES_BLOCK_SIZE 16
+
+// Left shift by 1 bit, with carry handling
+static void left_shift(uint8_t *input, uint8_t *output) {
+    uint8_t overflow = 0;
+    for (int i = AES_BLOCK_SIZE - 1; i >= 0; i--) {
+        output[i] = (input[i] << 1) | overflow;
+        overflow = (input[i] & 0x80) ? 1 : 0;
+    }
+}
+
+// XOR two blocks
+static void xor_block(uint8_t *a, uint8_t *b, uint8_t *result) {
+    for (int i = 0; i < AES_BLOCK_SIZE; i++) {
+        result[i] = a[i] ^ b[i];
+    }
+}
+
+// Simplified CMAC implementation
+int wc_AesCmac(const uint8_t *key, int keyLen, const uint8_t *data, int dataLen, uint8_t *out_mac) {
+    if (keyLen != 16 || !key || !data || !out_mac) return -1;
+
+    uint8_t k1[AES_BLOCK_SIZE] = {0};
+    uint8_t k2[AES_BLOCK_SIZE] = {0};
+    uint8_t l[AES_BLOCK_SIZE] = {0};
+    uint8_t zero[AES_BLOCK_SIZE] = {0};
+
+    // Encrypt zero block with key to generate L
+    encrypt_sym(zero, AES_BLOCK_SIZE, key, l);
+
+    // Generate subkeys
+    left_shift(l, k1);
+    if (l[0] & 0x80) k1[AES_BLOCK_SIZE-1] ^= 0x87;
+
+    left_shift(k1, k2);
+    if (k1[0] & 0x80) k2[AES_BLOCK_SIZE-1] ^= 0x87;
+
+    // CMAC calculation
+    uint8_t block[AES_BLOCK_SIZE] = {0};
+    uint8_t last_block[AES_BLOCK_SIZE] = {0};
+    int num_blocks = (dataLen + AES_BLOCK_SIZE - 1) / AES_BLOCK_SIZE;
+
+    for (int i = 0; i < num_blocks; i++) {
+        int remaining = (i == num_blocks - 1) ? dataLen - (i * AES_BLOCK_SIZE) : AES_BLOCK_SIZE;
+        
+        // Copy data block
+        memset(block, 0, AES_BLOCK_SIZE);
+        memcpy(block, data + i * AES_BLOCK_SIZE, remaining);
+
+        // Last block handling
+        if (i == num_blocks - 1) {
+            // Padding if needed
+            if (remaining < AES_BLOCK_SIZE) {
+                block[remaining] = 0x80;
+                xor_block(block, k2, block);
+            } else {
+                xor_block(block, k1, block);
+            }
+        }
+
+        // XOR with previous block
+        xor_block(block, last_block, block);
+
+        // Encrypt
+        encrypt_sym(block, AES_BLOCK_SIZE, key, last_block);
+    }
+
+    // Final MAC is the last encrypted block
+    memcpy(out_mac, last_block, AES_BLOCK_SIZE);
+
+    return 0;
+}
 
 /* Stubs para boot flag (dummy, se usan en boot_flag() pero no son necesarios en la versión final) */
 static const uint32_t aseiFuengleR[] = { 0x12345678, 0 };
