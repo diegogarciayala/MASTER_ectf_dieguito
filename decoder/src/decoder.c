@@ -1,7 +1,7 @@
 /**
  * @file    decoder.c
  * @brief   Implementación segura del Decoder para eCTF.
- *          Se incorpora validación de HMAC y descifrado con AES-CTR.
+ *          Se incorpora validación de HMAC (usando wolfSSL’s wc_AesCmac) y descifrado con AES-CTR.
  * @date    2025
  *
  * NOTA: Las funciones de entrada/salida (read_packet, write_packet, print_debug, print_error, etc.)
@@ -20,7 +20,9 @@
  #include "simple_flash.h"
  #include "host_messaging.h"
  #include "simple_uart.h"
- #include "simple_crypto.h"  // Proporciona BLOCK_SIZE (definido, por ejemplo, como AES_BLOCK_SIZE)
+ #include "simple_crypto.h"  // Proporciona BLOCK_SIZE (ej.: AES_BLOCK_SIZE)
+ 
+ #include <wolfssl/wolfcrypt/cmac.h>  // Usado para calcular CMAC
  
  // Definiciones para FLASH_STATUS_ADDR si no estuviera definido
  #ifndef FLASH_STATUS_ADDR
@@ -36,7 +38,7 @@
  #define DEFAULT_CHANNEL_TIMESTAMP 0xFFFFFFFFFFFFFFFF
  #define FLASH_FIRST_BOOT 0xDEADBEEF
  
- // Stubs para boot flag (se usan en boot_flag() pero no son necesarios en la versión final)
+ // Stubs para boot flag (dummy, se usan en boot_flag() pero no son necesarios en la versión final)
  static const uint32_t aseiFuengleR[] = { 0x12345678, 0 }; // Valores dummy
  static const uint32_t djFIehjkklIH[] = { 0x87654321, 0 }; // Valores dummy
  
@@ -56,7 +58,7 @@
  typedef struct {
      uint32_t channel;
      uint64_t timestamp;
-     uint8_t data[FRAME_SIZE + 8 + 16]; // ciphertext (frame+TS) + HMAC (16B)
+     uint8_t data[FRAME_SIZE + 8 + 16]; // ciphertext (frame||TS) + HMAC (16B)
  } frame_packet_t;
  
  typedef struct {
@@ -64,7 +66,7 @@
      uint64_t start_timestamp;
      uint64_t end_timestamp;
      uint32_t channel;
-     uint8_t hmac[16]; // Se agrega el HMAC al final
+     uint8_t hmac[16]; // HMAC al final
  } subscription_update_packet_t;
  
  typedef struct {
@@ -95,8 +97,7 @@
  
  /* ------------------ FUNCIONES CRIPTOGRÁFICAS ------------------ */
  
- /* Función auxiliar: AES-CTR. Se utiliza encrypt_sym() para cifrar bloques.
-    Se realiza un cast a (uint8_t *) en key para evitar advertencias por const. */
+ /* AES-CTR implementado con encrypt_sym(). Se hace cast a (uint8_t*) en key para evitar advertencias. */
  void aes_ctr_crypt(const uint8_t *key, const uint8_t *nonce, 
                     const uint8_t *in, uint8_t *out, uint32_t length) {
      uint8_t counter[BLOCK_SIZE];
@@ -104,7 +105,7 @@
      uint32_t num_blocks = (length + BLOCK_SIZE - 1) / BLOCK_SIZE;
      for (uint32_t i = 0; i < num_blocks; i++) {
          uint8_t keystream[BLOCK_SIZE];
-         // Se cifra el bloque "counter" usando AES en ECB. Se hace cast de key a (uint8_t *)
+         // Cifra el counter usando AES-ECB (encrypt_sym)
          encrypt_sym(counter, BLOCK_SIZE, (uint8_t *)key, keystream);
          uint32_t block_size = (length - i * BLOCK_SIZE > BLOCK_SIZE) ? BLOCK_SIZE : (length - i * BLOCK_SIZE);
          for (uint32_t j = 0; j < block_size; j++) {
@@ -118,25 +119,19 @@
      }
  }
  
- /* Implementación muy básica de AES-CMAC.
-    NOTA: Para fines demostrativos, se asume que data_len es múltiplo de BLOCK_SIZE.
-          En producción se debe implementar padding y subclaves según NIST SP 800-38B.
- */
+ /* Función de CMAC usando wolfSSL.
+    Se usa wc_AesCmac con llave de 16 bytes. */
  void aes_cmac(const uint8_t *key, const uint8_t *data, uint32_t data_len, uint8_t *out_mac) {
-     uint8_t mac[BLOCK_SIZE] = {0};
-     for (uint32_t i = 0; i < data_len; i += BLOCK_SIZE) {
-         for (uint32_t j = 0; j < BLOCK_SIZE; j++) {
-             mac[j] ^= data[i + j];
-         }
-         // Se hace cast a (uint8_t *) para evitar advertencias
-         encrypt_sym(mac, BLOCK_SIZE, (uint8_t *)key, mac);
+     /* wc_AesCmac devuelve 0 en caso de éxito */
+     if (wc_AesCmac(key, 16, data, data_len, out_mac) != 0) {
+         // En caso de error, podemos borrar out_mac
+         memset(out_mac, 0, 16);
      }
-     memcpy(out_mac, mac, 16);
  }
  
- /* Funciones para obtener claves de forma “segura”.
-    Aquí se usan implementaciones dummy que deben coincidir con lo generado por el encoder. */
+ /* ------------------ OBTENCIÓN DE CLAVES (dummy) ------------------ */
  int get_channel_key(uint32_t channel, uint8_t *key_out) {
+     // Implementación dummy: 16 bytes basados en el canal.
      for (int i = 0; i < 16; i++) {
          key_out[i] = (uint8_t)(channel + i);
      }
@@ -144,6 +139,7 @@
  }
  
  int get_K_mac(uint8_t *key_out) {
+     // Implementación dummy: clave fija de 16 bytes.
      uint8_t dummy[16] = { 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
                            0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F };
      memcpy(key_out, dummy, 16);
@@ -151,7 +147,6 @@
  }
  
  /* ------------------ FUNCIONES DEL DECODER ------------------ */
- 
  int is_subscribed(uint32_t channel) {
      if (channel == EMERGENCY_CHANNEL) {
          return 1;

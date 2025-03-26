@@ -3,7 +3,7 @@
 Author: Ben Janis
 Date: 2025
 
-Este módulo genera un código de suscripción seguro para un decodificador. 
+Este módulo genera un código de suscripción seguro para un decodificador.
 El formato es:
     {CHID (4B) | DECODER_ID (4B) | TS_start (8B) | TS_end (8B) | HMAC (16B)}
 El HMAC se calcula con AES-CMAC usando la clave derivada para el canal.
@@ -13,13 +13,12 @@ import argparse
 import json
 import struct
 import binascii
+from pathlib import Path
 from loguru import logger
-from Crypto.Hash import CMAC
-from Crypto.Cipher import AES
+from cryptography.hazmat.primitives.cmac import CMAC
+from cryptography.hazmat.primitives.ciphers import algorithms
 
-def gen_subscription(
-    secrets: bytes, device_id: int, start: int, end: int, channel: int
-) -> bytes:
+def gen_subscription(secrets: bytes, device_id: int, start: int, end: int, channel: int) -> bytes:
     # Se carga el JSON de los secretos
     secrets = json.loads(secrets)
     # Se obtiene la clave para el canal solicitado
@@ -30,11 +29,11 @@ def gen_subscription(
     # Prepara los datos de la suscripción:
     # {channel (uint32), decoder_id (uint32), ts_start (uint64), ts_end (uint64)}
     data = struct.pack("<IIQQ", channel, device_id, start, end)
-    # Calcula el HMAC usando AES-CMAC con la clave del canal
-    cobj = CMAC.new(channel_key, ciphermod=AES)
+    # Calcula el HMAC usando AES-CMAC (cryptography)
+    cobj = CMAC(algorithms.AES(channel_key))
     cobj.update(data)
-    hmac = cobj.digest()
-    # Se retorna la suscripción completa: datos || HMAC
+    hmac = cobj.finalize()
+    # Retorna la suscripción completa: datos || HMAC
     return data + hmac
 
 def parse_args():
@@ -45,18 +44,11 @@ def parse_args():
         action="store_true",
         help="Force creation of subscription file, overwriting existing file",
     )
-    parser.add_argument(
-        "secrets_file",
-        type=argparse.FileType("rb"),
-        help="Path to the secrets file created by ectf25_design.gen_secrets",
-    )
+    parser.add_argument("secrets_file", type=argparse.FileType("rb"),
+                        help="Path to the secrets file created by ectf25_design.gen_secrets")
     parser.add_argument("subscription_file", type=Path, help="Subscription output")
-    parser.add_argument(
-        "device_id", type=lambda x: int(x, 0), help="Device ID of the update recipient."
-    )
-    parser.add_argument(
-        "start", type=lambda x: int(x, 0), help="Subscription start timestamp"
-    )
+    parser.add_argument("device_id", type=lambda x: int(x, 0), help="Device ID of the update recipient.")
+    parser.add_argument("start", type=lambda x: int(x, 0), help="Subscription start timestamp")
     parser.add_argument("end", type=int, help="Subscription end timestamp")
     parser.add_argument("channel", type=int, help="Channel to subscribe to")
     return parser.parse_args()
