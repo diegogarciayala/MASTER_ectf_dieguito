@@ -63,5 +63,5 @@ def main():
         f.write(subscription)
     logger.success(f"Wrote subscription to {str(args.subscription_file.absolute())}")
 
-if __name__ == "__main__":
+if _name_ == "_main_":
     main()
