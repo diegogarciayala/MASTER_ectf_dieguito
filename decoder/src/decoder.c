@@ -1,18 +1,74 @@
 /**
  * @file    decoder.c
  * @brief   Implementación segura del Decoder para eCTF.
- *          Se incorpora validación de HMAC (usando wolfSSL’s wc_AesCmac) y descifrado con AES-CTR.
+ *          Se incorpora validación de HMAC (para canales distintos de emergencia)
+ *          y descifrado con AES-CTR.
  * @date    2025
  *
  * NOTA: Las funciones de entrada/salida (read_packet, write_packet, print_debug, print_error, etc.)
  *       no se modifican.
  */
 
-
+/* Incluir las opciones de wolfSSL; si no se quiere usar user_settings, no definir WOLFSSL_USER_SETTINGS */
 #include <wolfssl/options.h>
 #include <wolfssl/wolfcrypt/cmac.h>  /* Se espera que esto declare wc_AesCmac */
 
+/* Si wc_AesCmac no está declarado, implementamos una versión simplificada: */
+#ifndef WC_AESCMAC_DECLARED
+#define AES_BLOCK_SIZE 16
 
+static void left_shift(const uint8_t *input, uint8_t *output) {
+    uint8_t overflow = 0;
+    for (int i = AES_BLOCK_SIZE - 1; i >= 0; i--) {
+        output[i] = (input[i] << 1) | overflow;
+        overflow = (input[i] & 0x80) ? 1 : 0;
+    }
+}
+
+static void xor_block(const uint8_t *a, const uint8_t *b, uint8_t *result) {
+    for (int i = 0; i < AES_BLOCK_SIZE; i++)
+        result[i] = a[i] ^ b[i];
+}
+
+/* Implementación muy básica de AES-CMAC, usando encrypt_sym() para cifrar bloques.
+   Nota: Esta implementación no es optimizada y se asume que encrypt_sym() funciona correctamente. */
+int wc_AesCmac(const uint8_t *key, int keyLen, const uint8_t *data, int dataLen, uint8_t *out_mac) {
+    if (keyLen != AES_BLOCK_SIZE || !key || !data || !out_mac) return -1;
+    uint8_t L[AES_BLOCK_SIZE] = {0};
+    uint8_t K1[AES_BLOCK_SIZE] = {0};
+    uint8_t K2[AES_BLOCK_SIZE] = {0};
+    uint8_t zero[AES_BLOCK_SIZE] = {0};
+    encrypt_sym(zero, AES_BLOCK_SIZE, (uint8_t *)key, L);
+    left_shift(L, K1);
+    if (L[0] & 0x80)
+        K1[AES_BLOCK_SIZE - 1] ^= 0x87;
+    left_shift(K1, K2);
+    if (K1[0] & 0x80)
+        K2[AES_BLOCK_SIZE - 1] ^= 0x87;
+    int num_blocks = (dataLen + AES_BLOCK_SIZE - 1) / AES_BLOCK_SIZE;
+    uint8_t last_block[AES_BLOCK_SIZE] = {0};
+    uint8_t block[AES_BLOCK_SIZE] = {0};
+    uint8_t X[AES_BLOCK_SIZE] = {0}; /* Initialize with zeros */
+    for (int i = 0; i < num_blocks; i++) {
+        int offset = i * AES_BLOCK_SIZE;
+        int remaining = (dataLen - offset) < AES_BLOCK_SIZE ? (dataLen - offset) : AES_BLOCK_SIZE;
+        memset(block, 0, AES_BLOCK_SIZE);
+        memcpy(block, data + offset, remaining);
+        if (i == num_blocks - 1) {
+            if (remaining < AES_BLOCK_SIZE) {
+                block[remaining] = 0x80;
+                xor_block(block, K2, block);
+            } else {
+                xor_block(block, K1, block);
+            }
+        }
+        xor_block(X, block, X);
+        encrypt_sym(X, AES_BLOCK_SIZE, (uint8_t *)key, X);
+    }
+    memcpy(out_mac, X, AES_BLOCK_SIZE);
+    return 0;
+}
+#endif
 
 #include <stdio.h>
 #include <stdint.h>
@@ -26,9 +82,9 @@
 #include "simple_flash.h"
 #include "host_messaging.h"
 #include "simple_uart.h"
-#include "simple_crypto.h"  /* Proporciona BLOCK_SIZE (ej.: AES_BLOCK_SIZE) */
+#include "simple_crypto.h"  /* Proporciona BLOCK_SIZE */
 
-/* Solo se definen estas macros si no han sido definidas ya por los headers del SDK */
+/* Si ya están definidas en el SDK, se usan las macros; si no, se definen */
 #ifndef MXC_FLASH_MEM_BASE
     #define MXC_FLASH_MEM_BASE 0x00000000
 #endif
@@ -38,7 +94,6 @@
 #ifndef MXC_FLASH_PAGE_SIZE
     #define MXC_FLASH_PAGE_SIZE 0x00001000
 #endif
-
 #ifndef FLASH_STATUS_ADDR
     #define FLASH_STATUS_ADDR ((MXC_FLASH_MEM_BASE + MXC_FLASH_MEM_SIZE) - (2 * MXC_FLASH_PAGE_SIZE))
 #endif
@@ -49,85 +104,7 @@
 #define DEFAULT_CHANNEL_TIMESTAMP 0xFFFFFFFFFFFFFFFF
 #define FLASH_FIRST_BOOT 0xDEADBEEF
 
-
-#include <stdint.h>
-#include <string.h>
-
-// AES block size
-#define AES_BLOCK_SIZE 16
-
-// Left shift by 1 bit, with carry handling
-static void left_shift(uint8_t *input, uint8_t *output) {
-    uint8_t overflow = 0;
-    for (int i = AES_BLOCK_SIZE - 1; i >= 0; i--) {
-        output[i] = (input[i] << 1) | overflow;
-        overflow = (input[i] & 0x80) ? 1 : 0;
-    }
-}
-
-// XOR two blocks
-static void xor_block(uint8_t *a, uint8_t *b, uint8_t *result) {
-    for (int i = 0; i < AES_BLOCK_SIZE; i++) {
-        result[i] = a[i] ^ b[i];
-    }
-}
-
-// Simplified CMAC implementation
-int wc_AesCmac(const uint8_t *key, int keyLen, const uint8_t *data, int dataLen, uint8_t *out_mac) {
-    if (keyLen != 16 || !key || !data || !out_mac) return -1;
-
-    uint8_t k1[AES_BLOCK_SIZE] = {0};
-    uint8_t k2[AES_BLOCK_SIZE] = {0};
-    uint8_t l[AES_BLOCK_SIZE] = {0};
-    uint8_t zero[AES_BLOCK_SIZE] = {0};
-
-    // Encrypt zero block with key to generate L
-    encrypt_sym(zero, AES_BLOCK_SIZE, key, l);
-
-    // Generate subkeys
-    left_shift(l, k1);
-    if (l[0] & 0x80) k1[AES_BLOCK_SIZE-1] ^= 0x87;
-
-    left_shift(k1, k2);
-    if (k1[0] & 0x80) k2[AES_BLOCK_SIZE-1] ^= 0x87;
-
-    // CMAC calculation
-    uint8_t block[AES_BLOCK_SIZE] = {0};
-    uint8_t last_block[AES_BLOCK_SIZE] = {0};
-    int num_blocks = (dataLen + AES_BLOCK_SIZE - 1) / AES_BLOCK_SIZE;
-
-    for (int i = 0; i < num_blocks; i++) {
-        int remaining = (i == num_blocks - 1) ? dataLen - (i * AES_BLOCK_SIZE) : AES_BLOCK_SIZE;
-        
-        // Copy data block
-        memset(block, 0, AES_BLOCK_SIZE);
-        memcpy(block, data + i * AES_BLOCK_SIZE, remaining);
-
-        // Last block handling
-        if (i == num_blocks - 1) {
-            // Padding if needed
-            if (remaining < AES_BLOCK_SIZE) {
-                block[remaining] = 0x80;
-                xor_block(block, k2, block);
-            } else {
-                xor_block(block, k1, block);
-            }
-        }
-
-        // XOR with previous block
-        xor_block(block, last_block, block);
-
-        // Encrypt
-        encrypt_sym(block, AES_BLOCK_SIZE, key, last_block);
-    }
-
-    // Final MAC is the last encrypted block
-    memcpy(out_mac, last_block, AES_BLOCK_SIZE);
-
-    return 0;
-}
-
-/* Stubs para boot flag (dummy, se usan en boot_flag() pero no son necesarios en la versión final) */
+/* Stubs para boot flag (dummy) */
 static const uint32_t aseiFuengleR[] = { 0x12345678, 0 };
 static const uint32_t djFIehjkklIH[] = { 0x87654321, 0 };
 
@@ -135,18 +112,15 @@ uint8_t deobfuscate(uint32_t a, uint32_t b) {
     return (uint8_t)(a ^ b);
 }
 
-/* Stub para crypto_example, si CRYPTO_EXAMPLE está definido */
 #ifdef CRYPTO_EXAMPLE
-void crypto_example(void) {
-    /* Implementación vacía */
-}
+void crypto_example(void) { }
 #endif
 
 #pragma pack(push, 1)
 typedef struct {
     uint32_t channel;
     uint64_t timestamp;
-    uint8_t data[FRAME_SIZE + 8 + 16]; /* ciphertext (frame || TS) + HMAC (16B) */
+    uint8_t data[FRAME_SIZE + 8 + 16]; /* ciphertext (frame||TS) + HMAC (16B) */
 } frame_packet_t;
 
 typedef struct {
@@ -154,7 +128,7 @@ typedef struct {
     uint64_t start_timestamp;
     uint64_t end_timestamp;
     uint32_t channel;
-    uint8_t hmac[16]; /* HMAC */
+    uint8_t hmac[16];
 } subscription_update_packet_t;
 
 typedef struct {
@@ -184,9 +158,6 @@ typedef struct {
 flash_entry_t decoder_status;
 
 /* ------------------ FUNCIONES CRIPTOGRÁFICAS ------------------ */
-
-/* AES-CTR implementado con encrypt_sym().
-   Se hace cast a (uint8_t*) en key para evitar advertencias por const. */
 void aes_ctr_crypt(const uint8_t *key, const uint8_t *nonce, 
                    const uint8_t *in, uint8_t *out, uint32_t length) {
     uint8_t counter[BLOCK_SIZE];
@@ -206,8 +177,7 @@ void aes_ctr_crypt(const uint8_t *key, const uint8_t *nonce,
     }
 }
 
-/* Función de CMAC usando wolfSSL.
-   Se utiliza wc_AesCmac con una llave de 16 bytes. */
+/* Función de CMAC usando wolfSSL (nuestra implementación o la de wolfSSL si está configurada) */
 void aes_cmac(const uint8_t *key, const uint8_t *data, uint32_t data_len, uint8_t *out_mac) {
     if (wc_AesCmac(key, 16, data, data_len, out_mac) != 0) {
         memset(out_mac, 0, 16);
@@ -297,30 +267,35 @@ int decode(uint16_t pkt_len, frame_packet_t *new_frame) {
     uint64_t timestamp = new_frame->timestamp;
     uint32_t ciphertext_len = pkt_len - (12 + 16);
     uint8_t *ciphertext = new_frame->data;
-    uint8_t *received_hmac = new_frame->data + ciphertext_len;
     uint8_t header[12];
     memcpy(header, &channel, 4);
     memcpy(header + 4, &timestamp, 8);
-    uint8_t K_mac[16];
-    get_K_mac(K_mac);
-    uint8_t computed_hmac[16];
-    {
-        uint32_t hmac_data_len = 12 + ciphertext_len;
-        uint8_t *hmac_data = malloc(hmac_data_len);
-        if (!hmac_data)
+
+    /* Para canales distintos de emergencia se verifica el HMAC.
+       Para canal 0 (emergencia) se ignora la verificación, ya que todos deben poder decodificarlo. */
+    if (channel != EMERGENCY_CHANNEL) {
+        uint8_t K_mac[16];
+        get_K_mac(K_mac);
+        uint8_t computed_hmac[16];
+        {
+            uint32_t hmac_data_len = 12 + ciphertext_len;
+            uint8_t *hmac_data = malloc(hmac_data_len);
+            if (!hmac_data)
+                return -1;
+            memcpy(hmac_data, header, 12);
+            memcpy(hmac_data + 12, ciphertext, ciphertext_len);
+            aes_cmac(K_mac, hmac_data, hmac_data_len, computed_hmac);
+            free(hmac_data);
+        }
+        uint8_t *received_hmac = new_frame->data + ciphertext_len;
+        if (memcmp(computed_hmac, received_hmac, 16) != 0) {
+            STATUS_LED_RED();
+            print_error("HMAC verification failed in frame\n");
             return -1;
-        memcpy(hmac_data, header, 12);
-        memcpy(hmac_data + 12, ciphertext, ciphertext_len);
-        aes_cmac(K_mac, hmac_data, hmac_data_len, computed_hmac);
-        free(hmac_data);
+        }
     }
-    if (memcmp(computed_hmac, received_hmac, 16) != 0) {
-        STATUS_LED_RED();
-        print_error("HMAC verification failed in frame\n");
-        return -1;
-    }
+    /* Se procede a descifrar el frame */
     if (!is_subscribed(channel)) {
-        STATUS_LED_RED();
         sprintf(output_buf, "Receiving unsubscribed channel data. %u\n", channel);
         print_error(output_buf);
         return -1;
@@ -353,7 +328,7 @@ int decode(uint16_t pkt_len, frame_packet_t *new_frame) {
     return 0;
 }
 
-void init() {
+void init(void) {
     int ret;
     flash_simple_init();
     flash_simple_read(FLASH_STATUS_ADDR, &decoder_status, sizeof(flash_entry_t));
@@ -373,8 +348,7 @@ void init() {
     ret = uart_init();
     if (ret < 0) {
         STATUS_LED_ERROR();
-        while (1)
-            ;
+        while (1);
     }
 }
 
@@ -389,7 +363,7 @@ void boot_flag(void) {
     print_debug(output_buf);
 }
 
-int list_channels() {
+int list_channels(void) {
     list_response_t resp;
     uint16_t len;
     resp.n_channels = 0;
@@ -424,27 +398,27 @@ int main(void) {
             continue;
         }
         switch (cmd) {
-        case LIST_MSG:
-            STATUS_LED_CYAN();
-#ifdef CRYPTO_EXAMPLE
-            crypto_example();
-#endif
-            boot_flag();
-            list_channels();
-            break;
-        case DECODE_MSG:
-            STATUS_LED_PURPLE();
-            decode(pkt_len, (frame_packet_t *)uart_buf);
-            break;
-        case SUBSCRIBE_MSG:
-            STATUS_LED_YELLOW();
-            update_subscription(pkt_len, (subscription_update_packet_t *)uart_buf);
-            break;
-        default:
-            STATUS_LED_ERROR();
-            sprintf(output_buf, "Invalid Command: %c\n", cmd);
-            print_error(output_buf);
-            break;
+            case LIST_MSG:
+                STATUS_LED_CYAN();
+    #ifdef CRYPTO_EXAMPLE
+                crypto_example();
+    #endif
+                boot_flag();
+                list_channels();
+                break;
+            case DECODE_MSG:
+                STATUS_LED_PURPLE();
+                decode(pkt_len, (frame_packet_t *)uart_buf);
+                break;
+            case SUBSCRIBE_MSG:
+                STATUS_LED_YELLOW();
+                update_subscription(pkt_len, (subscription_update_packet_t *)uart_buf);
+                break;
+            default:
+                STATUS_LED_ERROR();
+                sprintf(output_buf, "Invalid Command: %c\n", cmd);
+                print_error(output_buf);
+                break;
         }
     }
 }

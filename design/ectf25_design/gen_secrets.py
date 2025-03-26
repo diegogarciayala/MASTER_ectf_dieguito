@@ -26,7 +26,7 @@ def gen_secrets(channels: list[int]) -> bytes:
     master_key = os.urandom(16)
     K_mac = derive_key(master_key, b"MAC")
     all_channels = set(channels)
-    all_channels.add(0)
+    all_channels.add(0)  # Incluir canal 0 (emergencia)
     keys = {}
     for ch in all_channels:
         label = b"CHANNEL" + ch.to_bytes(4, "little")
