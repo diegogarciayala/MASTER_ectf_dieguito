@@ -35,17 +35,14 @@ def gen_secrets(channels: list[int]) -> bytes:
         "master_key": binascii.hexlify(master_key).decode(),
         "K_mac": binascii.hexlify(K_mac).decode(),
         "keys": keys,
-        "channels": channels  # canales originalmente especificados (sin el 0)
+        "channels": channels
     }
     return json.dumps(secrets).encode()
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--force", "-f",
-        action="store_true",
-        help="Force creation of secrets file, overwriting existing file",
-    )
+    parser.add_argument("--force", "-f", action="store_true",
+                        help="Force creation of secrets file, overwriting existing file")
     parser.add_argument("secrets_file", type=Path,
                         help="Path to the secrets file to be created")
     parser.add_argument("channels", nargs="+", type=int,

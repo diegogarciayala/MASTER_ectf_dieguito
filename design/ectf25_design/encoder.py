@@ -7,7 +7,7 @@ Este módulo cifra un frame de TV usando un esquema seguro:
     - Se usa AES-CTR para cifrar (FRAME || TS)
     - Se calcula un HMAC (AES-CMAC) sobre {CHID | TS | CIPHERTEXT} usando K_mac.
 El paquete final tiene la estructura:
-    { CHID (4B) | TS (8B) | CIPHERTEXT (FRAME||TS) | HMAC (16B) }
+    { CHID (4B) | TS (8B) | CIPHERTEXT (FRAME || TS) | HMAC (16B) }
 """
 
 import argparse
@@ -39,13 +39,15 @@ class Encoder:
         ciphertext = self.encrypt_frame(channel_key, nonce, plaintext)
         header = struct.pack("<IQ", channel, timestamp)
         cobj = CMAC(algorithms.AES(self.K_mac))
-        cobj.update(header + ciphertext)
+        # Forzamos la conversión a bytes (aunque header+ciphertext ya debería ser bytes)
+        cobj.update(bytes(header + ciphertext))
         hmac = cobj.finalize()
         return header + ciphertext + hmac
 
 def main():
     parser = argparse.ArgumentParser(prog="ectf25_design.encoder")
-    parser.add_argument("secrets_file", type=argparse.FileType("rb"), help="Path to the secrets file")
+    parser.add_argument("secrets_file", type=argparse.FileType("rb"),
+                        help="Path to the secrets file")
     parser.add_argument("channel", type=int, help="Channel to encode for")
     parser.add_argument("frame", help="Contents of the frame")
     parser.add_argument("timestamp", type=int, help="64b timestamp to use")
