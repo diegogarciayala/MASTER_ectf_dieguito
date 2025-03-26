@@ -1,64 +1,76 @@
 #!/usr/bin/env python3
 """
-gen_secrets.py
----------------
-Genera el archivo de secretos para el sistema seguro.
-El archivo contendrá:
-  - "channels": Lista de canales válidos.
-  - "channel_keys": Para cada canal se genera una clave aleatoria de 32 bytes (codificada en base64).
-  - "KMAC": Clave aleatoria de 16 bytes (codificada en base64).
-  - "partial_keys": Diccionario de claves aleatorias de 16 bytes para cada decodificador.
+Author: Ben Janis
+Date: 2025
+
+Este módulo genera el archivo de secretos para eCTF. Ahora se crea un master key
+aleatoria y se derivan las claves de cada canal (incluyendo el canal 0 de emergencia)
+y la clave de autenticación (K_mac) usando AES-CMAC.
 """
 
 import argparse
 import json
-from pathlib import Path
-from loguru import logger
-import base64
 import os
-from typing import List
+import binascii
+from pathlib import Path
+from Crypto.Hash import CMAC
+from Crypto.Cipher import AES
+from loguru import logger
 
-def gen_secrets(channels: List[int], num_decoders: int = 8) -> bytes:
-    KMAC = os.urandom(16)
-    channel_keys = {str(channel): base64.b64encode(os.urandom(32)).decode('utf-8')
-                    for channel in channels}
-    partial_keys = {f"decoder_{i}": base64.b64encode(os.urandom(16)).decode('utf-8')
-                    for i in range(1, num_decoders + 1)}
+def derive_key(master_key: bytes, label: bytes) -> bytes:
+    cobj = CMAC.new(master_key, ciphermod=AES)
+    cobj.update(label)
+    return cobj.digest()
+
+def gen_secrets(channels: list[int]) -> bytes:
+    # Genera una master key de 16 bytes
+    master_key = os.urandom(16)
+    # Deriva K_mac con la etiqueta "MAC"
+    K_mac = derive_key(master_key, b"MAC")
+    # Se incluye el canal 0 (emergencia) junto a los canales pasados
+    all_channels = set(channels)
+    all_channels.add(0)
+    keys = {}
+    for ch in all_channels:
+        # La etiqueta es "CHANNEL" seguido del canal en 4 bytes little endian
+        label = b"CHANNEL" + ch.to_bytes(4, "little")
+        keys[str(ch)] = binascii.hexlify(derive_key(master_key, label)).decode()
     secrets = {
-        "channels": channels,
-        "channel_keys": channel_keys,
-        "KMAC": base64.b64encode(KMAC).decode('utf-8'),
-        "partial_keys": partial_keys
+        "master_key": binascii.hexlify(master_key).decode(),
+        "K_mac": binascii.hexlify(K_mac).decode(),
+        "keys": keys,
+        "channels": channels  # canales originalmente especificados (sin el 0)
     }
-    secrets_json = json.dumps(secrets, indent=2)
-    logger.debug(f"Generated secrets (length={len(secrets_json.encode('utf-8'))} bytes):\n{secrets_json}")
-    return secrets_json.encode()
+    return json.dumps(secrets).encode()
 
 def parse_args():
-    parser = argparse.ArgumentParser(
-        description="Genera el archivo de secretos para el sistema seguro."
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--force",
+        "-f",
+        action="store_true",
+        help="Force creation of secrets file, overwriting existing file",
     )
-    parser.add_argument("--force", "-f", action="store_true", help="Sobreescribir archivo de secretos existente.")
-    parser.add_argument("secrets_file", type=Path, help="Ruta del archivo de secretos a crear.")
-    parser.add_argument("channels", nargs="+", type=int, help="Lista de canales válidos (excluyendo canal 0).")
+    parser.add_argument(
+        "secrets_file",
+        type=Path,
+        help="Path to the secrets file to be created",
+    )
+    parser.add_argument(
+        "channels",
+        nargs="+",
+        type=int,
+        help="Supported channels. Channel 0 (broadcast) is always valid and will not be provided in this list",
+    )
     return parser.parse_args()
 
 def main():
     args = parse_args()
-    secrets_data = gen_secrets(args.channels)
-    mode = "wb" if args.force else "xb"
-    # Escribe en la ruta dada por el usuario...
-    with open(args.secrets_file, mode) as f:
-        f.write(secrets_data)
-    logger.success(f"Wrote secrets to {args.secrets_file.absolute()}")
-    # Y también copia (o escribe) en la ruta global /global.secrets
-    global_path = Path("/global.secrets")
-    try:
-        with open(global_path, "wb") as f_global:
-            f_global.write(secrets_data)
-        logger.success(f"Global secrets written to {global_path}")
-    except Exception as e:
-        logger.error(f"Error escribiendo global secrets en {global_path}: {e}")
+    secrets = gen_secrets(args.channels)
+    logger.debug(f"Generated secrets: {secrets}")
+    with open(args.secrets_file, "wb" if args.force else "xb") as f:
+        f.write(secrets)
+    logger.success(f"Wrote secrets to {str(args.secrets_file.absolute())}")
 
 if __name__ == "__main__":
     main()
