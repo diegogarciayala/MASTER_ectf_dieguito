@@ -21,8 +21,8 @@ from cryptography.hazmat.primitives.ciphers import algorithms
 
 def gen_subscription(secrets: bytes, device_id: int, start: int, end: int, channel: int) -> bytes:
     secrets = json.loads(secrets)
-    if channel == 0:
-        raise ValueError("No se permite suscribirse al canal de emergencia")
+    #if channel == 0:
+    #    raise ValueError("No se permite suscribirse al canal de emergencia")
     key_hex = secrets["keys"].get(str(channel))
     if not key_hex:
         raise ValueError("Clave para canal no encontrada")
