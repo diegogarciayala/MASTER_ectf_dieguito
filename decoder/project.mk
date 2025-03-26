@@ -13,6 +13,12 @@
 
 # Add your config here!
 
+# Agrega cJSON.c a la lista de fuentes para compilar
+SRCS += src/cJSON.c
+
+# Asegúrate de que el directorio donde está cJSON.h se incluya en la ruta de búsqueda de headers.
+IPATH += src
+
 # This example is only compatible with the FTHR board,
 # so we override the BOARD value to hard-set it.
 override BOARD=FTHR_RevA
