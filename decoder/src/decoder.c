@@ -10,7 +10,9 @@
 
 /* Incluir las opciones y la librería de CMAC de wolfSSL */
 #include <wolfssl/options.h>
-#include "wolfssl/wolfcrypt/src/cmac.h"
+#include <wolfssl/wolfcrypt/cmac.h>
+
+
 
 /* Declaración de encrypt_sym para que el compilador lo reconozca.
    La firma debe coincidir con la definición en simple_crypto.h */

@@ -28,6 +28,9 @@ IPATH+=../deployment
 IPATH+=inc/
 IPATH+=wolfssl
 VPATH+=src/
+IPATH += wolfssl/wolfcrypt/src
+
+
 
 # ****************** eCTF Bootloader *******************
 # DO NOT REMOVE
