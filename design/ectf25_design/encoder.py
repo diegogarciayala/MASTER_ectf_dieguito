@@ -54,10 +54,14 @@ class Encoder:
         self.encoder_id = 1  # Fijo según el original.
 
     def _get_channel_key(self, channel: int) -> bytes:
+        if channel == 0:
+            # Para el canal de emergencia (0), se retorna una clave fija
+            return b'\xFF' * 32
         key_b64 = self.channel_keys.get(str(channel))
         if not key_b64:
             raise ValueError(f"No se encontró clave para el canal {channel}.")
         return base64.b64decode(key_b64)
+
 
     def _derive_dynamic_key(self, K_channel: bytes, seq: int, channel: int) -> bytes:
         # Derive K1 = AES-CMAC(K_channel, "K1-Derivation")
