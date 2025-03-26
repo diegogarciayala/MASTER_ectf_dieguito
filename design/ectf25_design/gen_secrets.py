@@ -13,16 +13,15 @@ import json
 import os
 import binascii
 from pathlib import Path
-from Crypto.Hash import CMAC
-from Crypto.Cipher import AES
+from cryptography.hazmat.primitives.cmac import CMAC
+from cryptography.hazmat.primitives.ciphers import algorithms
 from loguru import logger
 
 def derive_key(master_key: bytes, label: bytes) -> bytes:
-    cobj = CMAC.new(master_key, ciphermod=AES)
-    cobj.update(label)
-    # Se obtiene el digest en hexadecimal y luego se reconvierte a bytes para evitar errores
-    digest_hex = cobj.hexdigest()
-    return binascii.unhexlify(digest_hex)
+    # Utilizamos CMAC de la librería cryptography para evitar el problema con bytearray
+    c = CMAC(algorithms.AES(master_key))
+    c.update(label)
+    return c.finalize()
 
 def gen_secrets(channels: list[int]) -> bytes:
     # Genera una master key de 16 bytes
