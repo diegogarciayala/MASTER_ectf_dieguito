@@ -7,6 +7,7 @@ Este módulo genera un código de suscripción seguro para un decodificador.
 El formato es:
     { CHID (4B) | DECODER_ID (4B) | TS_start (8B) | TS_end (8B) | HMAC (16B) }
 El HMAC se calcula con AES-CMAC usando la clave derivada para el canal.
+Nota: No se permite suscribirse al canal de emergencia (0).
 """
 
 import argparse
@@ -20,7 +21,6 @@ from cryptography.hazmat.primitives.ciphers import algorithms
 
 def gen_subscription(secrets: bytes, device_id: int, start: int, end: int, channel: int) -> bytes:
     secrets = json.loads(secrets)
-    # Se rechaza el canal de emergencia para suscripciones
     if channel == 0:
         raise ValueError("No se permite suscribirse al canal de emergencia")
     key_hex = secrets["keys"].get(str(channel))

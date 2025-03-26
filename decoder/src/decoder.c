@@ -200,6 +200,7 @@ int get_K_mac(uint8_t *key_out) {
 
 /* ------------------ FUNCIONES DEL DECODER ------------------ */
 int is_subscribed(uint32_t channel) {
+    /* El canal de emergencia siempre se considera suscrito */
     if (channel == EMERGENCY_CHANNEL)
         return 1;
     for (int i = 0; i < MAX_CHANNEL_COUNT; i++) {
@@ -210,6 +211,7 @@ int is_subscribed(uint32_t channel) {
     return 0;
 }
 
+/* compute_subscription_hmac se usa solo para canales distintos de emergencia */
 void compute_subscription_hmac(const subscription_update_packet_t *sub, uint8_t *out_hmac) {
     uint8_t channel_key[16];
     get_channel_key(sub->channel, channel_key);
@@ -323,6 +325,7 @@ int decode(uint16_t pkt_len, frame_packet_t *new_frame) {
     return 0;
 }
 
+/* En init() ahora se marca el canal de emergencia como suscrito de forma predeterminada */
 void init(void) {
     int ret;
     flash_simple_init();
@@ -336,6 +339,11 @@ void init(void) {
             subscription[i].end_timestamp = DEFAULT_CHANNEL_TIMESTAMP;
             subscription[i].active = false;
         }
+        /* Marcar el canal 0 (emergencia) como suscrito por defecto */
+        subscription[0].active = true;
+        subscription[0].id = EMERGENCY_CHANNEL;
+        subscription[0].start_timestamp = 0;
+        subscription[0].end_timestamp = DEFAULT_CHANNEL_TIMESTAMP;
         memcpy(decoder_status.subscribed_channels, subscription, MAX_CHANNEL_COUNT * sizeof(channel_status_t));
         flash_simple_erase_page(FLASH_STATUS_ADDR);
         flash_simple_write(FLASH_STATUS_ADDR, &decoder_status, sizeof(flash_entry_t));
@@ -362,8 +370,14 @@ int list_channels(void) {
     list_response_t resp;
     uint16_t len;
     resp.n_channels = 0;
+    /* Siempre se reporta el canal de emergencia */
+    resp.channel_info[resp.n_channels].channel = EMERGENCY_CHANNEL;
+    resp.channel_info[resp.n_channels].start = 0;
+    resp.channel_info[resp.n_channels].end = DEFAULT_CHANNEL_TIMESTAMP;
+    resp.n_channels++;
     for (uint32_t i = 0; i < MAX_CHANNEL_COUNT; i++) {
-        if (decoder_status.subscribed_channels[i].active) {
+        if (decoder_status.subscribed_channels[i].active &&
+            decoder_status.subscribed_channels[i].id != EMERGENCY_CHANNEL) {
             resp.channel_info[resp.n_channels].channel = decoder_status.subscribed_channels[i].id;
             resp.channel_info[resp.n_channels].start = decoder_status.subscribed_channels[i].start_timestamp;
             resp.channel_info[resp.n_channels].end = decoder_status.subscribed_channels[i].end_timestamp;
