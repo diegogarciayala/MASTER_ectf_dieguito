@@ -20,8 +20,9 @@ from loguru import logger
 def derive_key(master_key: bytes, label: bytes) -> bytes:
     cobj = CMAC.new(master_key, ciphermod=AES)
     cobj.update(label)
-    # Se fuerza la conversión a bytes para evitar el error de tipo
-    return bytes(cobj.digest())
+    # Se obtiene el digest en hexadecimal y luego se convierte a bytes para evitar errores con bytearray.
+    digest_hex = cobj.hexdigest()
+    return binascii.unhexlify(digest_hex)
 
 def gen_secrets(channels: list[int]) -> bytes:
     # Genera una master key de 16 bytes
