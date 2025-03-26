@@ -33,9 +33,9 @@
  #include "wolfssl/options.h"
  #include <wolfssl/wolfcrypt/aes.h>
  
- // We do NOT include <wolfssl/wolfcrypt/base64.h> anymore. Instead we use a custom decode_base64 below.
+ // No incluimos base64.h; usamos nuestra función decode_base64
  
- // cJSON for parsing secrets JSON
+ // cJSON para parsear el JSON de secretos
  #include "cJSON.h"
  
  /**********************************************************
@@ -50,18 +50,17 @@
  #define MAX_CHANNEL_COUNT 8
  #define EMERGENCY_CHANNEL 0
  
- // For our secure format, we have:
- //   Header (20 bytes) + Subscription (52 bytes) + Ciphertext (24 bytes) = 96 bytes total.
+ // Secure packet format: Header (20 bytes) + Subscription (52 bytes) + Ciphertext (24 bytes) = 96 bytes total.
  #define HEADER_SIZE       20
  #define SUBS_DATA_SIZE    36
  #define SUBS_MAC_SIZE     16
- #define SUBS_TOTAL_SIZE   (SUBS_DATA_SIZE + SUBS_MAC_SIZE)  // 52
+ #define SUBS_TOTAL_SIZE   (SUBS_DATA_SIZE + SUBS_MAC_SIZE)  // 52 bytes
  #define FRAME_SEC_SIZE    8
  #define TRAILER_SIZE      16
- #define CIPHER_SIZE       (FRAME_SEC_SIZE + TRAILER_SIZE)   // 24
+ #define CIPHER_SIZE       (FRAME_SEC_SIZE + TRAILER_SIZE)   // 24 bytes
  #define PACKET_SIZE       (HEADER_SIZE + SUBS_TOTAL_SIZE + CIPHER_SIZE) // 96
  
- // For the LIST command, we keep the original format of channel(4) + two 64-bit timestamps.
+ // For LIST command: channel (4) + two 64-bit timestamps.
  #define DEFAULT_CHANNEL_TIMESTAMP 0xFFFFFFFFFFFFFFFFULL
  #define FLASH_FIRST_BOOT 0xDEADBEEF
  #define FLASH_STATUS_ADDR ((MXC_FLASH_MEM_BASE + MXC_FLASH_MEM_SIZE) - (2 * MXC_FLASH_PAGE_SIZE))
@@ -109,22 +108,18 @@
  } flash_entry_t;
  
  /**********************************************************
-  ************************ GLOBALS *************************/
+   ************************ GLOBALS *************************/
  static flash_entry_t decoder_status;
  
- // In a real design, these are loaded from JSON. We'll store them here after parsing.
- static uint8_t G_K_MASTER[16];   // Master key (dummy or from JSON if needed)
- static uint8_t g_channel_key[32]; // Channel key (we pick one channel's key by default)
+ // Claves seguras globales (en un diseño real se cargan del JSON)
+ static uint8_t G_K_MASTER[16];   // Master key (dummy o del JSON, según se necesite)
+ static uint8_t g_channel_key[32]; // Clave del canal para canales no emergencia
  
- static cJSON *global_secrets = NULL; // parsed secrets JSON
+ // Puntero global al JSON de secretos parseado.
+ static cJSON *global_secrets = NULL;
  
  /**********************************************************
   ****************** LOAD SECURE KEYS **********************/
- /**
-  * @brief  Loads the secure keys from the JSON file located at
-  *         ../design/ectf25_design/global_secrets/secrets.json
-  * @return 0 on success, -1 on error
-  */
  static int load_secure_keys(void)
  {
      const char *secrets_path = "../design/ectf25_design/global_secrets/secrets.json";
@@ -158,23 +153,18 @@
          fprintf(stderr, "[decoder] ERROR: JSON parse of secrets file failed\n");
          return -1;
      }
- 
-     // Optionally read a master key from the JSON. Otherwise, set a default.
+     // Opcional: leer master key del JSON; de lo contrario, valor fijo
      memset(G_K_MASTER, 0xAB, sizeof(G_K_MASTER));
- 
-     // We'll fill g_channel_key from the JSON in init() once we pick a channel.
      return 0;
  }
  
  /**********************************************************
   ****************** BASE64 HELPER FUNCTION *****************/
- // A simple (not highly optimized) base64 decoder. 
  static const char b64_table[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
  static int decode_base64(const char* in, uint8_t *out, int out_size)
  {
      int in_len = (int)strlen(in);
      int pad = 0;
-     // Count padding
      if (in_len >= 2) {
          if (in[in_len-1] == '=') pad++;
          if (in[in_len-2] == '=') pad++;
@@ -185,13 +175,12 @@
      int i = 0, j = 0;
      uint32_t buffer = 0;
      int bits_collected = 0;
- 
      for (i = 0; i < in_len; i++) {
          char c = in[i];
          if (c == '=' || c == '\n' || c == '\r' || c == ' ')
-             break; // stop reading
+             break;
          const char *p = strchr(b64_table, c);
-         if (!p) continue; // skip unrecognized chars
+         if (!p) continue;
          buffer = (buffer << 6) | (p - b64_table);
          bits_collected += 6;
          if (bits_collected >= 8) {
@@ -201,14 +190,11 @@
              }
          }
      }
-     return j; // number of bytes decoded
+     return j;
  }
  
  /**********************************************************
   ****************** CRYPTO FUNCTIONS **********************/
- /** 
-  * @brief Left shift a 16-byte block by one bit (AES-CMAC subkey generation).
-  */
  static void leftshift_onebit(const uint8_t* in, uint8_t* out)
  {
      uint8_t overflow = 0;
@@ -218,9 +204,6 @@
      }
  }
  
- /**
-  * @brief AES-ECB encrypt one block (16 bytes).
-  */
  static int aes_ecb_encrypt_block(const uint8_t* key, int keyLen, const uint8_t* in, uint8_t* out)
  {
      Aes aes;
@@ -230,9 +213,6 @@
      return 0;
  }
  
- /**
-  * @brief AES-CMAC (RFC4493)
-  */
  static int aes_cmac(const uint8_t* key, int keyLen, const uint8_t* msg, size_t msg_len, uint8_t mac[16])
  {
      uint8_t zero_block[16] = {0};
@@ -261,7 +241,7 @@
      memset(M_last, 0, 16);
  
      if (complete) {
-         memcpy(M_last, msg + (n - 1)*16, 16);
+         memcpy(M_last, msg + (n - 1) * 16, 16);
          for (int i = 0; i < 16; i++) {
              M_last[i] ^= K1[i];
          }
@@ -270,7 +250,7 @@
          uint8_t temp[16];
          memset(temp, 0, 16);
          if (rem > 0) {
-             memcpy(temp, msg + (n - 1)*16, rem);
+             memcpy(temp, msg + (n - 1) * 16, rem);
          }
          temp[rem] = 0x80;
          for (int i = 0; i < 16; i++) {
@@ -286,14 +266,12 @@
      memset(X, 0, 16);
      uint8_t block[16];
  
-     // Process all but last block
      for (size_t i = 0; i < n - 1; i++) {
          for (int j = 0; j < 16; j++) {
-             block[j] = X[j] ^ msg[i*16 + j];
+             block[j] = X[j] ^ msg[i * 16 + j];
          }
          wc_AesEncryptDirect(&aes, X, block);
      }
-     // Final
      for (int j = 0; j < 16; j++) {
          block[j] = X[j] ^ M_last[j];
      }
@@ -302,9 +280,6 @@
      return 0;
  }
  
- /**
-  * @brief AES-CTR encryption (big-endian counter).
-  */
  static void aes_ctr_xcrypt(const uint8_t* key, int keyLen, const uint8_t* nonce,
                             uint8_t* buffer, size_t length)
  {
@@ -322,9 +297,8 @@
      for (size_t i = 0; i < blocks; i++) {
          wc_AesEncryptDirect(&aes, keystream, counter);
          for (int j = 0; j < 16; j++) {
-             buffer[i*16 + j] ^= keystream[j];
+             buffer[i * 16 + j] ^= keystream[j];
          }
-         // increment counter (big-endian)
          for (int c = 15; c >= 0; c--) {
              counter[c]++;
              if (counter[c] != 0) break;
@@ -333,14 +307,11 @@
      if (rem > 0) {
          wc_AesEncryptDirect(&aes, keystream, counter);
          for (size_t j = 0; j < rem; j++) {
-             buffer[blocks*16 + j] ^= keystream[j];
+             buffer[blocks * 16 + j] ^= keystream[j];
          }
      }
  }
  
- /**
-  * @brief Store 64-bit value in big-endian order.
-  */
  static void store64_be(uint64_t val, uint8_t out[8])
  {
      out[0] = (val >> 56) & 0xFF;
@@ -349,8 +320,8 @@
      out[3] = (val >> 32) & 0xFF;
      out[4] = (val >> 24) & 0xFF;
      out[5] = (val >> 16) & 0xFF;
-     out[6] = (val >>  8) & 0xFF;
-     out[7] = (val >>  0) & 0xFF;
+     out[6] = (val >> 8)  & 0xFF;
+     out[7] = (val >> 0)  & 0xFF;
  }
  
  /**********************************************************
@@ -364,7 +335,7 @@
          return -1;
      }
  
-     // Parse the header
+     // Parse header
      uint32_t seq, channel, encoder_id;
      uint64_t ts;
      memcpy(&seq, packet, 4);
@@ -376,11 +347,25 @@
             seq, channel, encoder_id, (unsigned long long)ts);
      fflush(stdout);
  
+     // Seleccionar la clave a usar:
+     // Si el canal es 0 (emergency), usamos una clave fija (32 bytes de 0xFF)
+     // de lo contrario, usamos g_channel_key cargada desde el JSON.
+     const uint8_t *key_for_channel = g_channel_key;
+     static const uint8_t emergency_key[32] = {
+         0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+         0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+         0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+         0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
+     };
+     if (channel == EMERGENCY_CHANNEL) {
+         key_for_channel = emergency_key;
+     }
+ 
      // Subscription is next 52 bytes
      const uint8_t* subs_data = packet + HEADER_SIZE;
      const uint8_t* subs_mac  = subs_data + SUBS_DATA_SIZE;
      uint8_t calc_mac[16];
-     if (aes_cmac(g_channel_key, 16, subs_data, SUBS_DATA_SIZE, calc_mac) != 0) {
+     if (aes_cmac(key_for_channel, 16, subs_data, SUBS_DATA_SIZE, calc_mac) != 0) {
          fprintf(stderr, "[decoder] ERROR: CMAC de suscripción falló\n");
          return -1;
      }
@@ -391,9 +376,9 @@
      printf("[decoder] CMAC de suscripción válido\n");
      fflush(stdout);
  
-     // Derive dynamic key
+     // Derive dynamic key:
      uint8_t K1[16];
-     if (aes_cmac(g_channel_key, 16,
+     if (aes_cmac(key_for_channel, 16,
                   (const uint8_t*)"K1-Derivation", strlen("K1-Derivation"), K1) != 0) {
          fprintf(stderr, "[decoder] ERROR: Falló la derivación de K1\n");
          return -1;
@@ -414,24 +399,20 @@
      const uint8_t* ciphertext = packet + HEADER_SIZE + SUBS_TOTAL_SIZE;
      uint8_t* plaintext = (uint8_t*)malloc(CIPHER_SIZE);
      if (!plaintext) return -1;
- 
      memcpy(plaintext, ciphertext, CIPHER_SIZE);
  
      uint8_t nonce[16];
      memset(nonce, 0, 16);
-     // big-endian seq in last 8 bytes
      store64_be(seq, nonce + 8);
- 
      aes_ctr_xcrypt(dynamic_key, 16, nonce, plaintext, CIPHER_SIZE);
  
-     // The first 8 bytes are the frame. The next 16 are the trailer, which we ignore.
+     // The first 8 bytes are the frame; the trailer (16 bytes) is ignored.
      *frame_out = (uint8_t*)malloc(FRAME_SEC_SIZE);
      if (!(*frame_out)) {
          free(plaintext);
          return -1;
      }
      memcpy(*frame_out, plaintext, FRAME_SEC_SIZE);
- 
      free(plaintext);
      *frame_len_out = FRAME_SEC_SIZE;
      return 0;
@@ -455,7 +436,7 @@
  
  static void boot_flag(void)
  {
-     // For debugging, we print a fixed flag (NOT_REAL_FLAG).
+     // For debugging, print a fixed flag.
      print_debug("Boot Reference Flag: NOT_REAL_FLAG\n");
  }
  
@@ -464,7 +445,6 @@
      list_response_t resp;
      pkt_len_t len;
      resp.n_channels = 0;
- 
      for (uint32_t i = 0; i < MAX_CHANNEL_COUNT; i++) {
          if (decoder_status.subscribed_channels[i].active) {
              resp.channel_info[resp.n_channels].channel =
@@ -511,14 +491,13 @@
  }
  
  /**
-  * @brief Process a decode command. 
-  *        Expects a 96-byte packet (PACKET_SIZE).
+  * @brief Process a decode command.
+  *        Expects a 96-byte packet.
   */
  static int decode(pkt_len_t pkt_len, frame_packet_t *new_frame)
  {
      uint8_t *decrypted_frame = NULL;
      size_t decrypted_len = 0;
- 
      int ret = secure_process_packet(new_frame->data, PACKET_SIZE,
                                      &decrypted_frame, &decrypted_len);
      if (ret < 0) {
@@ -526,20 +505,17 @@
          print_error("Decodificación falló\n");
          return -1;
      }
- 
-     // Output the decrypted frame
      write_packet(DECODE_MSG, decrypted_frame, (uint16_t)decrypted_len);
      free(decrypted_frame);
      return 0;
  }
  
  /**********************************************************
-  *********************** INITIALIZATION *********************/
+   *********************** INITIALIZATION *********************/
  static void init(void)
  {
      flash_simple_init();
      flash_simple_read(FLASH_STATUS_ADDR, &decoder_status, sizeof(flash_entry_t));
- 
      if (decoder_status.first_boot != FLASH_FIRST_BOOT) {
          print_debug("First boot.  Setting flash...\n");
          decoder_status.first_boot = FLASH_FIRST_BOOT;
@@ -550,25 +526,22 @@
              subscription[i].active = false;
          }
          memcpy(decoder_status.subscribed_channels, subscription,
-                MAX_CHANNEL_COUNT*sizeof(channel_status_t));
+                MAX_CHANNEL_COUNT * sizeof(channel_status_t));
          flash_simple_erase_page(FLASH_STATUS_ADDR);
          flash_simple_write(FLASH_STATUS_ADDR, &decoder_status, sizeof(flash_entry_t));
      }
- 
      int ret = uart_init();
      if (ret < 0) {
          STATUS_LED_ERROR();
          while (1);
      }
- 
      // Load keys from secrets JSON
      if (load_secure_keys() != 0) {
          STATUS_LED_ERROR();
          print_error("Error al cargar el archivo de secretos\n");
          while (1);
      }
- 
-     // Example: set g_channel_key from the JSON for channel "1"
+     // For channels ≠ emergency, set g_channel_key from the JSON for channel "1"
      cJSON *ck = cJSON_GetObjectItem(global_secrets, "channel_keys");
      if (ck) {
          cJSON *key_item = cJSON_GetObjectItem(ck, "1");
@@ -587,54 +560,44 @@
  }
  
  /**********************************************************
-  ************************** MAIN LOOP **********************/
+   ************************** MAIN LOOP **********************/
  int main(void)
  {
      init();
      print_debug("Decoder Booted!\n");
- 
      while (1) {
          print_debug("Ready\n");
          STATUS_LED_GREEN();
- 
          msg_type_t cmd;
          uint8_t uart_buf[1024];
          uint16_t pkt_len;
- 
          int result = read_packet(&cmd, uart_buf, &pkt_len);
          if (result < 0) {
              STATUS_LED_ERROR();
              print_error("Failed to receive cmd from host\n");
              continue;
          }
- 
          switch (cmd) {
-         case LIST_MSG:
-             STATUS_LED_CYAN();
-             // If we had a "crypto_example()" we would remove or comment it out
-             // since it's not actually implemented.
-             boot_flag();
-             list_channels();
-             break;
- 
-         case DECODE_MSG:
-             STATUS_LED_PURPLE();
-             decode(pkt_len, (frame_packet_t *)uart_buf);
-             break;
- 
-         case SUBSCRIBE_MSG:
-             STATUS_LED_YELLOW();
-             update_subscription(pkt_len, (subscription_update_packet_t *)uart_buf);
-             break;
- 
-         default:
-             STATUS_LED_ERROR();
-             {
+             case LIST_MSG:
+                 STATUS_LED_CYAN();
+                 boot_flag();
+                 list_channels();
+                 break;
+             case DECODE_MSG:
+                 STATUS_LED_PURPLE();
+                 decode(pkt_len, (frame_packet_t *)uart_buf);
+                 break;
+             case SUBSCRIBE_MSG:
+                 STATUS_LED_YELLOW();
+                 update_subscription(pkt_len, (subscription_update_packet_t *)uart_buf);
+                 break;
+             default: {
                  char output_buf[64];
                  snprintf(output_buf, sizeof(output_buf), "Invalid Command: %c\n", cmd);
                  print_error(output_buf);
+                 STATUS_LED_ERROR();
+                 break;
              }
-             break;
          }
      }
      return 0;

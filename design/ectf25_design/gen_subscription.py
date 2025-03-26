@@ -28,17 +28,22 @@ def derive_cmac(key: bytes, data: bytes) -> bytes:
 
 def gen_subscription(secrets: bytes, device_id: int, start: int, end: int, channel: int) -> bytes:
     secrets_data = json.loads(secrets)
-    channel_key_b64 = secrets_data.get("channel_keys", {}).get(str(channel))
-    if channel_key_b64 is None:
-        raise ValueError(f"No se encontró la clave para el canal {channel} en GS.")
-    channel_key = base64.b64decode(channel_key_b64)
-    # Pack 36 bytes of subscription data:
-    #   channel (4 bytes), decoder_id (4 bytes), start (8 bytes), end (8 bytes), 20 bytes de relleno.
+    # Si el canal es 0 (emergency), usamos una clave fija.
+    if channel == 0:
+        channel_key = b'\xFF' * 32  # Clave fija para emergency
+    else:
+        channel_key_b64 = secrets_data.get("channel_keys", {}).get(str(channel))
+        if channel_key_b64 is None:
+            raise ValueError(f"No se encontró la clave para el canal {channel} en GS.")
+        channel_key = base64.b64decode(channel_key_b64)
+    # Empaquetar los 36 bytes de datos de suscripción:
+    #   canal (4 bytes), decoder_id (4 bytes), start (8 bytes), end (8 bytes), 20 bytes de relleno.
     subs_data = struct.pack("<I I Q Q 20s", channel, device_id, start, end, b'\x00'*20)
     mac_16 = derive_cmac(channel_key, subs_data)
     subscription = subs_data + mac_16  # Total: 36 + 16 = 52 bytes.
     logger.debug(f"Generated subscription: {subscription.hex()}")
     return subscription
+
 
 def parse_args():
     parser = argparse.ArgumentParser(
