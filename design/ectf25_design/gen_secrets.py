@@ -60,5 +60,5 @@ def main():
         f.write(secrets)
     logger.success(f"Wrote secrets to {str(args.secrets_file.absolute())}")
 
-if _name_ == "_main_":
+if __name__ == "__main__":
     main()
