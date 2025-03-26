@@ -8,8 +8,6 @@
  *       no se modifican.
  */
 
-/* Forzar que se usen los settings de usuario para wolfSSL */
-#define WOLFSSL_USER_SETTINGS
 
 #include <wolfssl/options.h>
 #include <wolfssl/wolfcrypt/cmac.h>  /* Se espera que esto declare wc_AesCmac */
