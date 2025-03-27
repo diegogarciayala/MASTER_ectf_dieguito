@@ -28,11 +28,12 @@
  #define KEY_SIZE 32
 
  #define timestamp_t uint64_t
- #define channel_id_t uint32_t
- #define decoder_id_t uint32_t
- #define pkt_len_t uint16_t
+#define channel_id_t uint32_t
+#define decoder_id_t uint32_t
+#define pkt_len_t uint16_t
 
- // Calculate the flash address where we will store channel info as the 2nd to last page available
+
+// Calculate the flash address where we will store channel info as the 2nd to last page available
 #define FLASH_STATUS_ADDR ((MXC_FLASH_MEM_BASE + MXC_FLASH_MEM_SIZE) - (2 * MXC_FLASH_PAGE_SIZE))
  
  #pragma pack(push, 1)
@@ -194,6 +195,28 @@
      write_packet(DECODE_MSG, decrypted_frame, FRAME_SIZE);
      return 0;
  }
+
+ int list_channels() {
+    list_response_t resp;
+    pkt_len_t len;
+
+    resp.n_channels = 0;
+
+    for (uint32_t i = 0; i < MAX_CHANNEL_COUNT; i++) {
+        if (decoder_status.subscribed_channels[i].active) {
+            resp.channel_info[resp.n_channels].channel =  decoder_status.subscribed_channels[i].id;
+            resp.channel_info[resp.n_channels].start = decoder_status.subscribed_channels[i].start_timestamp;
+            resp.channel_info[resp.n_channels].end = decoder_status.subscribed_channels[i].end_timestamp;
+            resp.n_channels++;
+        }
+    }
+
+    len = sizeof(resp.n_channels) + (sizeof(channel_info_t) * resp.n_channels);
+
+    // Success message
+    write_packet(LIST_MSG, &resp, len);
+    return 0;
+}
  
  void init() {
      int ret;
