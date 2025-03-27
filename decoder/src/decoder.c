@@ -26,6 +26,14 @@
  #define HMAC_SIZE 32
  #define NONCE_SIZE 20
  #define KEY_SIZE 32
+
+ #define timestamp_t uint64_t
+ #define channel_id_t uint32_t
+ #define decoder_id_t uint32_t
+ #define pkt_len_t uint16_t
+
+ // Calculate the flash address where we will store channel info as the 2nd to last page available
+#define FLASH_STATUS_ADDR ((MXC_FLASH_MEM_BASE + MXC_FLASH_MEM_SIZE) - (2 * MXC_FLASH_PAGE_SIZE))
  
  #pragma pack(push, 1)
  typedef struct {
