@@ -430,13 +430,17 @@ SECRETS_JSON := $(abspath ../design/ectf25_design/secrets.json)
 SECRETS_H    := $(abspath include/secrets.h)
 GEN_SECRETS  := $(abspath ../design/ectf25_design/gen_secrets.py)
 
+# Regla para crear el directorio "include" si no existe
+include_dir:
+	@mkdir -p include
+
 # Regla para generar secrets.json (si no existe o se fuerza la regeneración)
 $(SECRETS_JSON):
 	@echo "Generando secrets.json..."
 	python3 $(GEN_SECRETS) --force $(SECRETS_JSON) 1 2 3
 
-# Regla para generar secrets.h a partir de secrets.json
-$(SECRETS_H): $(SECRETS_JSON)
+# Regla para generar secrets.h a partir de secrets.json; depende de que exista el directorio "include"
+$(SECRETS_H): $(SECRETS_JSON) | include_dir
 	@echo "Generando secrets.h a partir de secrets.json..."
 	python3 $(GEN_SECRETS) --force --header $(SECRETS_H) $(SECRETS_JSON) 1 2 3
 
@@ -444,6 +448,7 @@ $(SECRETS_H): $(SECRETS_JSON)
 all: $(SECRETS_H)
 	@echo "Compilando firmware..."
 	arm-none-eabi-size --format=berkeley $(BUILD_DIR)/$(PROJECT).elf
+
 
 all:
 # 	Extend the functionality of the "all" recipe here
