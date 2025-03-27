@@ -18,6 +18,10 @@
  #include "host_messaging.h"
  #include "simple_uart.h"
  
+ /* Incluir el header generado con las claves */
+ #include "secrets.h"
+ 
+ /* Definitions for types and constants */
  #define MAX_CHANNEL_COUNT 8
  #define EMERGENCY_CHANNEL 0
  #define FRAME_SIZE 64
@@ -26,15 +30,14 @@
  #define HMAC_SIZE 32
  #define NONCE_SIZE 20
  #define KEY_SIZE 32
-
+ 
  #define timestamp_t uint64_t
-#define channel_id_t uint32_t
-#define decoder_id_t uint32_t
-#define pkt_len_t uint16_t
-
-
-// Calculate the flash address where we will store channel info as the 2nd to last page available
-#define FLASH_STATUS_ADDR ((MXC_FLASH_MEM_BASE + MXC_FLASH_MEM_SIZE) - (2 * MXC_FLASH_PAGE_SIZE))
+ #define channel_id_t uint32_t
+ #define decoder_id_t uint32_t
+ #define pkt_len_t uint16_t
+ 
+ /* Calculate the flash address for channel info */
+ #define FLASH_STATUS_ADDR ((MXC_FLASH_MEM_BASE + MXC_FLASH_MEM_SIZE) - (2 * MXC_FLASH_PAGE_SIZE))
  
  #pragma pack(push, 1)
  typedef struct {
@@ -74,6 +77,20 @@
  } secure_flash_entry_t;
  #pragma pack(pop)
  
+ /* Definiciones para listar canales */
+ #pragma pack(push, 1)
+ typedef struct {
+     channel_id_t channel;
+     timestamp_t start;
+     timestamp_t end;
+ } channel_info_t;
+ 
+ typedef struct {
+     uint32_t n_channels;
+     channel_info_t channel_info[MAX_CHANNEL_COUNT];
+ } list_response_t;
+ #pragma pack(pop)
+ 
  secure_flash_entry_t decoder_status;
  WC_RNG rng;
  
@@ -86,7 +103,7 @@
      wc_HmacUpdate(&hmac, (uint8_t*)update, sizeof(secure_subscription_update_packet_t) - HMAC_SIZE);
      wc_HmacFinal(&hmac, computed_hmac);
      
-     return memcmp(computed_hmac, update->hmac, HMAC_SIZE) == 0;
+     return (memcmp(computed_hmac, update->hmac, HMAC_SIZE) == 0);
  }
  
  int is_subscribed(channel_id_t channel, timestamp_t timestamp) {
@@ -177,8 +194,8 @@
      
      // Select channel key (emergency or specific channel)
      channel_key = (new_frame->channel == EMERGENCY_CHANNEL) ? 
-         decoder_status.secrets.master_key : 
-         decoder_status.secrets.channel_keys[new_frame->channel - 1];
+          decoder_status.secrets.master_key : 
+          decoder_status.secrets.channel_keys[new_frame->channel - 1];
      
      // Prepare nonce
      memcpy(nonce, &new_frame->channel, sizeof(channel_id_t));
@@ -195,28 +212,28 @@
      write_packet(DECODE_MSG, decrypted_frame, FRAME_SIZE);
      return 0;
  }
-
+ 
  int list_channels() {
-    list_response_t resp;
-    pkt_len_t len;
-
-    resp.n_channels = 0;
-
-    for (uint32_t i = 0; i < MAX_CHANNEL_COUNT; i++) {
-        if (decoder_status.subscribed_channels[i].active) {
-            resp.channel_info[resp.n_channels].channel =  decoder_status.subscribed_channels[i].id;
-            resp.channel_info[resp.n_channels].start = decoder_status.subscribed_channels[i].start_timestamp;
-            resp.channel_info[resp.n_channels].end = decoder_status.subscribed_channels[i].end_timestamp;
-            resp.n_channels++;
-        }
-    }
-
-    len = sizeof(resp.n_channels) + (sizeof(channel_info_t) * resp.n_channels);
-
-    // Success message
-    write_packet(LIST_MSG, &resp, len);
-    return 0;
-}
+     list_response_t resp;
+     pkt_len_t len;
+  
+     resp.n_channels = 0;
+  
+     for (uint32_t i = 0; i < MAX_CHANNEL_COUNT; i++) {
+         if (decoder_status.subscribed_channels[i].active) {
+             resp.channel_info[resp.n_channels].channel = decoder_status.subscribed_channels[i].id;
+             resp.channel_info[resp.n_channels].start = decoder_status.subscribed_channels[i].start_timestamp;
+             resp.channel_info[resp.n_channels].end = decoder_status.subscribed_channels[i].end_timestamp;
+             resp.n_channels++;
+         }
+     }
+  
+     len = sizeof(resp.n_channels) + (sizeof(channel_info_t) * resp.n_channels);
+  
+     // Success message
+     write_packet(LIST_MSG, &resp, len);
+     return 0;
+ }
  
  void init() {
      int ret;
@@ -236,6 +253,19 @@
          // Zero out secrets
          memset(&decoder_status.secrets, 0, sizeof(secure_secrets_t));
          
+         /* En este ejemplo se copia directamente la master key y claves desde el header.
+            En un sistema real se debe decodificar la cadena Base64 para obtener los bytes. */
+         memcpy(decoder_status.secrets.master_key, MASTER_KEY_BASE64, KEY_SIZE);
+         memcpy(decoder_status.secrets.mac_key, MAC_KEY_BASE64, KEY_SIZE);
+         memcpy(decoder_status.secrets.channel_keys[0], CHANNEL_KEY_1, KEY_SIZE);
+         memcpy(decoder_status.secrets.channel_keys[1], CHANNEL_KEY_2, KEY_SIZE);
+         memcpy(decoder_status.secrets.channel_keys[2], CHANNEL_KEY_3, KEY_SIZE);
+         memcpy(decoder_status.secrets.channel_keys[3], CHANNEL_KEY_4, KEY_SIZE);
+         memcpy(decoder_status.secrets.channel_keys[4], CHANNEL_KEY_5, KEY_SIZE);
+         memcpy(decoder_status.secrets.channel_keys[5], CHANNEL_KEY_6, KEY_SIZE);
+         memcpy(decoder_status.secrets.channel_keys[6], CHANNEL_KEY_7, KEY_SIZE);
+         memcpy(decoder_status.secrets.channel_keys[7], CHANNEL_KEY_8, KEY_SIZE);
+         
          flash_simple_erase_page(FLASH_STATUS_ADDR);
          flash_simple_write(FLASH_STATUS_ADDR, &decoder_status, sizeof(secure_flash_entry_t));
      }
@@ -252,38 +282,35 @@
      msg_type_t cmd;
      int result;
      uint16_t pkt_len;
- 
+     
      init();
- 
+     
      print_debug("Secure Decoder Booted!\n");
- 
+     
      while (1) {
          print_debug("Ready\n");
          STATUS_LED_GREEN();
- 
+         
          result = read_packet(&cmd, uart_buf, &pkt_len);
          if (result < 0) {
              STATUS_LED_ERROR();
              print_error("Failed to receive cmd from host\n");
              continue;
          }
- 
+         
          switch (cmd) {
          case LIST_MSG:
              STATUS_LED_CYAN();
              list_channels();
              break;
- 
          case DECODE_MSG:
              STATUS_LED_PURPLE();
              decode(pkt_len, (secure_frame_packet_t *)uart_buf);
              break;
- 
          case SUBSCRIBE_MSG:
              STATUS_LED_YELLOW();
              update_subscription(pkt_len, (secure_subscription_update_packet_t *)uart_buf);
              break;
- 
          default:
              STATUS_LED_ERROR();
              print_error("Invalid Command\n");
@@ -291,3 +318,4 @@
          }
      }
  }
+ 

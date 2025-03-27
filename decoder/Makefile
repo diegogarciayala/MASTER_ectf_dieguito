@@ -420,6 +420,30 @@ ifeq "$(MAKECMDGOALS)" ""
 MAKECMDGOALS:=$(.DEFAULT_GOAL)
 endif
 
+# *******************************************************************************
+# Variables para generación de secretos.
+# Asumimos:
+# - El archivo JSON se genera en design/ectf25_design/secrets.json
+# - El header se genera en include/secrets.h (dentro de decoder/)
+# - El script gen_secrets.py se encuentra en ../design/ectf25_design/
+SECRETS_JSON := $(abspath ../design/ectf25_design/secrets.json)
+SECRETS_H    := $(abspath include/secrets.h)
+GEN_SECRETS  := $(abspath ../design/ectf25_design/gen_secrets.py)
+
+# Regla para generar secrets.json (si no existe o se fuerza la regeneración)
+$(SECRETS_JSON):
+	@echo "Generando secrets.json..."
+	python3 $(GEN_SECRETS) --force $(SECRETS_JSON) 1 2 3
+
+# Regla para generar secrets.h a partir de secrets.json
+$(SECRETS_H): $(SECRETS_JSON)
+	@echo "Generando secrets.h a partir de secrets.json..."
+	python3 $(GEN_SECRETS) --force --header $(SECRETS_H) $(SECRETS_JSON) 1 2 3
+
+# Asegurar que el target 'all' depende del header generado
+all: $(SECRETS_H)
+	@echo "Compilando firmware..."
+	arm-none-eabi-size --format=berkeley $(BUILD_DIR)/$(PROJECT).elf
 
 all:
 # 	Extend the functionality of the "all" recipe here
