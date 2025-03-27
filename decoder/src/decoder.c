@@ -1,414 +1,262 @@
 /**
  * @file    decoder.c
- * @brief   Implementación segura del Decoder para eCTF.
- *          Se incorpora validación de HMAC (para todos los canales) y descifrado con AES-CTR.
- * @date    2025
- *
- * NOTA: Las funciones de entrada/salida (read_packet, write_packet, print_debug, print_error, etc.)
- *       no se modifican.
+ * @brief   Secure Decoder Implementation for eCTF
  */
 
-/* Incluir las opciones y la librería de CMAC de wolfSSL */
-#include <wolfssl/options.h>
-#include <wolfssl/wolfcrypt/cmac.h>  /* Se espera que declare wc_AesCmac */
-
-/* Declarar encrypt_sym para que el compilador lo reconozca.
-   La firma debe coincidir con la definición en simple_crypto.h */
-int encrypt_sym(uint8_t *plaintext, size_t len, uint8_t *key, uint8_t *ciphertext);
-
-#include <stdio.h>
-#include <stdint.h>
-#include <string.h>
-#include <stdbool.h>
-#include <stdlib.h>
-#include "mxc_device.h"
-#include "status_led.h"
-#include "board.h"
-#include "mxc_delay.h"
-#include "simple_flash.h"
-#include "host_messaging.h"
-#include "simple_uart.h"
-#include "simple_crypto.h"  /* Proporciona BLOCK_SIZE */
-
-/* Definiciones de FLASH_STATUS_ADDR (si no se definen en los headers del SDK) */
-#ifndef MXC_FLASH_MEM_BASE
-    #define MXC_FLASH_MEM_BASE 0x00000000
-#endif
-#ifndef MXC_FLASH_MEM_SIZE
-    #define MXC_FLASH_MEM_SIZE 0x00100000
-#endif
-#ifndef MXC_FLASH_PAGE_SIZE
-    #define MXC_FLASH_PAGE_SIZE 0x00001000
-#endif
-#ifndef FLASH_STATUS_ADDR
-    #define FLASH_STATUS_ADDR ((MXC_FLASH_MEM_BASE + MXC_FLASH_MEM_SIZE) - (2 * MXC_FLASH_PAGE_SIZE))
-#endif
-
-#define MAX_CHANNEL_COUNT 8
-#define EMERGENCY_CHANNEL 0
-#define FRAME_SIZE 64
-#define DEFAULT_CHANNEL_TIMESTAMP 0xFFFFFFFFFFFFFFFF
-#define FLASH_FIRST_BOOT 0xDEADBEEF
-
-/* Stubs para boot flag (dummy) */
-static const uint32_t aseiFuengleR[] = { 0x12345678, 0 };
-static const uint32_t djFIehjkklIH[] = { 0x87654321, 0 };
-
-uint8_t deobfuscate(uint32_t a, uint32_t b) {
-    return (uint8_t)(a ^ b);
-}
-
-#ifdef CRYPTO_EXAMPLE
-void crypto_example(void) { }
-#endif
-
-/* Implementación mínima de wc_AesCmac (si wolfSSL no lo proporciona) */
-#ifndef WC_AESCMAC_DECLARED
-#define WC_AESCMAC_DECLARED
-#define AES_BLOCK_SIZE 16
-static void left_shift(const uint8_t *input, uint8_t *output) {
-    uint8_t overflow = 0;
-    for (int i = AES_BLOCK_SIZE - 1; i >= 0; i--) {
-        output[i] = (input[i] << 1) | overflow;
-        overflow = (input[i] & 0x80) ? 1 : 0;
-    }
-}
-static void xor_block(const uint8_t *a, const uint8_t *b, uint8_t *result) {
-    for (int i = 0; i < AES_BLOCK_SIZE; i++)
-        result[i] = a[i] ^ b[i];
-}
-int wc_AesCmac(const uint8_t *key, int keyLen, const uint8_t *data, int dataLen, uint8_t *out_mac) {
-    if (keyLen != AES_BLOCK_SIZE || !key || !data || !out_mac) return -1;
-    uint8_t L[AES_BLOCK_SIZE] = {0};
-    uint8_t K1[AES_BLOCK_SIZE] = {0};
-    uint8_t K2[AES_BLOCK_SIZE] = {0};
-    uint8_t zero[AES_BLOCK_SIZE] = {0};
-    encrypt_sym(zero, AES_BLOCK_SIZE, (uint8_t *)key, L);
-    left_shift(L, K1);
-    if (L[0] & 0x80)
-        K1[AES_BLOCK_SIZE - 1] ^= 0x87;
-    left_shift(K1, K2);
-    if (K1[0] & 0x80)
-        K2[AES_BLOCK_SIZE - 1] ^= 0x87;
-    int num_blocks = (dataLen + AES_BLOCK_SIZE - 1) / AES_BLOCK_SIZE;
-    uint8_t X[AES_BLOCK_SIZE] = {0};
-    uint8_t block[AES_BLOCK_SIZE] = {0};
-    for (int i = 0; i < num_blocks; i++) {
-        int offset = i * AES_BLOCK_SIZE;
-        int remaining = (dataLen - offset) < AES_BLOCK_SIZE ? (dataLen - offset) : AES_BLOCK_SIZE;
-        memset(block, 0, AES_BLOCK_SIZE);
-        memcpy(block, data + offset, remaining);
-        if (i == num_blocks - 1) {
-            if (remaining < AES_BLOCK_SIZE) {
-                block[remaining] = 0x80;
-                xor_block(block, K2, block);
-            } else {
-                xor_block(block, K1, block);
-            }
-        }
-        xor_block(X, block, X);
-        encrypt_sym(X, AES_BLOCK_SIZE, (uint8_t *)key, X);
-    }
-    memcpy(out_mac, X, AES_BLOCK_SIZE);
-    return 0;
-}
-#endif
-
-#pragma pack(push, 1)
-typedef struct {
-    uint32_t channel;
-    uint64_t timestamp;
-    uint8_t data[FRAME_SIZE + 8 + 16]; /* ciphertext (frame || TS) + HMAC (16B) */
-} frame_packet_t;
-
-typedef struct {
-    uint32_t decoder_id;
-    uint64_t start_timestamp;
-    uint64_t end_timestamp;
-    uint32_t channel;
-    uint8_t hmac[16];
-} subscription_update_packet_t;
-
-typedef struct {
-    uint32_t channel;
-    uint64_t start;
-    uint64_t end;
-} channel_info_t;
-
-typedef struct {
-    uint32_t n_channels;
-    channel_info_t channel_info[MAX_CHANNEL_COUNT];
-} list_response_t;
-#pragma pack(pop)
-
-typedef struct {
-    bool active;
-    uint32_t id;
-    uint64_t start_timestamp;
-    uint64_t end_timestamp;
-} channel_status_t;
-
-typedef struct {
-    uint32_t first_boot;
-    channel_status_t subscribed_channels[MAX_CHANNEL_COUNT];
-} flash_entry_t;
-
-flash_entry_t decoder_status;
-
-/* ------------------ FUNCIONES CRIPTOGRÁFICAS ------------------ */
-
-/* AES-CTR implementado con encrypt_sym() usando BLOCK_SIZE definido en simple_crypto.h */
-void aes_ctr_crypt(const uint8_t *key, const uint8_t *nonce, 
-                   const uint8_t *in, uint8_t *out, uint32_t length) {
-    uint8_t counter[BLOCK_SIZE];
-    memcpy(counter, nonce, BLOCK_SIZE);
-    uint32_t num_blocks = (length + BLOCK_SIZE - 1) / BLOCK_SIZE;
-    for (uint32_t i = 0; i < num_blocks; i++) {
-        uint8_t keystream[BLOCK_SIZE];
-        encrypt_sym(counter, BLOCK_SIZE, (uint8_t *)key, keystream);
-        uint32_t block_size = (length - i * BLOCK_SIZE > BLOCK_SIZE) ? BLOCK_SIZE : (length - i * BLOCK_SIZE);
-        for (uint32_t j = 0; j < block_size; j++) {
-            out[i * BLOCK_SIZE + j] = in[i * BLOCK_SIZE + j] ^ keystream[j];
-        }
-        for (int j = BLOCK_SIZE - 1; j >= 0; j--) {
-            if (++counter[j] != 0)
-                break;
-        }
-    }
-}
-
-void aes_cmac(const uint8_t *key, const uint8_t *data, uint32_t data_len, uint8_t *out_mac) {
-    if (wc_AesCmac(key, 16, data, data_len, out_mac) != 0) {
-        memset(out_mac, 0, 16);
-    }
-}
-
-/* ------------------ OBTENCIÓN DE CLAVES (dummy) ------------------ */
-int get_channel_key(uint32_t channel, uint8_t *key_out) {
-    for (int i = 0; i < 16; i++)
-        key_out[i] = (uint8_t)(channel + i);
-    return 0;
-}
-
-int get_K_mac(uint8_t *key_out) {
-    uint8_t dummy[16] = { 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
-                          0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F };
-    memcpy(key_out, dummy, 16);
-    return 0;
-}
-
-/* ------------------ FUNCIONES DEL DECODER ------------------ */
-int is_subscribed(uint32_t channel) {
-    for (int i = 0; i < MAX_CHANNEL_COUNT; i++) {
-        if (decoder_status.subscribed_channels[i].id == channel &&
-            decoder_status.subscribed_channels[i].active)
-            return 1;
-    }
-    return 0;
-}
-
-/* compute_subscription_hmac se calcula para todos los canales, incluido el 0 */
-void compute_subscription_hmac(const subscription_update_packet_t *sub, uint8_t *out_hmac) {
-    uint8_t channel_key[16];
-    get_channel_key(sub->channel, channel_key);
-    uint8_t data[4 + 4 + 8 + 8];
-    memcpy(data, &sub->channel, 4);
-    memcpy(data + 4, &sub->decoder_id, 4);
-    memcpy(data + 8, &sub->start_timestamp, 8);
-    memcpy(data + 16, &sub->end_timestamp, 8);
-    aes_cmac(channel_key, data, sizeof(data), out_hmac);
-}
-
-int update_subscription(uint16_t pkt_len, subscription_update_packet_t *update) {
-    uint8_t computed_hmac[16];
-    compute_subscription_hmac(update, computed_hmac);
-    if (memcmp(computed_hmac, update->hmac, 16) != 0) {
-        STATUS_LED_RED();
-        print_error("Failed to update subscription - invalid HMAC\n");
-        return -1;
-    }
-    int i;
-    for (i = 0; i < MAX_CHANNEL_COUNT; i++) {
-        if (decoder_status.subscribed_channels[i].id == update->channel ||
-            !decoder_status.subscribed_channels[i].active) {
-            decoder_status.subscribed_channels[i].active = true;
-            decoder_status.subscribed_channels[i].id = update->channel;
-            decoder_status.subscribed_channels[i].start_timestamp = update->start_timestamp;
-            decoder_status.subscribed_channels[i].end_timestamp = update->end_timestamp;
-            break;
-        }
-    }
-    if (i == MAX_CHANNEL_COUNT) {
-        STATUS_LED_RED();
-        print_error("Failed to update subscription - max subscriptions installed\n");
-        return -1;
-    }
-    flash_simple_erase_page(FLASH_STATUS_ADDR);
-    flash_simple_write(FLASH_STATUS_ADDR, &decoder_status, sizeof(flash_entry_t));
-    write_packet(SUBSCRIBE_MSG, NULL, 0);
-    return 0;
-}
-
-int decode(uint16_t pkt_len, frame_packet_t *new_frame) {
-    char output_buf[128] = {0};
-    if (pkt_len < 4 + 8 + 16) {
-        print_error("Packet too short\n");
-        return -1;
-    }
-    uint32_t channel = new_frame->channel;
-    uint64_t timestamp = new_frame->timestamp;
-    uint32_t ciphertext_len = pkt_len - (12 + 16);
-    uint8_t *ciphertext = new_frame->data;
-    uint8_t header[12];
-    memcpy(header, &channel, 4);
-    memcpy(header + 4, &timestamp, 8);
-    /* Siempre se verifica el HMAC, sin importar el canal */
-    {
-        uint8_t K_mac[16];
-        get_K_mac(K_mac);
-        uint8_t computed_hmac[16];
-        uint32_t hmac_data_len = 12 + ciphertext_len;
-        uint8_t *hmac_data = malloc(hmac_data_len);
-        if (!hmac_data)
-            return -1;
-        memcpy(hmac_data, header, 12);
-        memcpy(hmac_data + 12, ciphertext, ciphertext_len);
-        aes_cmac(K_mac, hmac_data, hmac_data_len, computed_hmac);
-        free(hmac_data);
-        uint8_t *received_hmac = new_frame->data + ciphertext_len;
-        if (memcmp(computed_hmac, received_hmac, 16) != 0) {
-            STATUS_LED_RED();
-            print_error("HMAC verification failed in frame\n");
-            return -1;
-        }
-    }
-    if (!is_subscribed(channel)) {
-        sprintf(output_buf, "Receiving unsubscribed channel data. %u\n", channel);
-        print_error(output_buf);
-        return -1;
-    }
-    uint8_t channel_key[16];
-    get_channel_key(channel, channel_key);
-    uint8_t nonce[BLOCK_SIZE];
-    memcpy(nonce, &timestamp, 8);
-    memcpy(nonce + 8, &channel, 4);
-    memset(nonce + 12, 0, 4);
-    uint8_t *plaintext = malloc(ciphertext_len);
-    if (!plaintext)
-        return -1;
-    aes_ctr_crypt(channel_key, nonce, ciphertext, plaintext, ciphertext_len);
-    if (ciphertext_len < 8) {
-        free(plaintext);
-        return -1;
-    }
-    uint32_t frame_len = ciphertext_len - 8;
-    uint64_t decrypted_ts;
-    memcpy(&decrypted_ts, plaintext + frame_len, 8);
-    if (decrypted_ts != timestamp) {
-        STATUS_LED_RED();
-        print_error("Timestamp mismatch in decrypted frame\n");
-        free(plaintext);
-        return -1;
-    }
-    write_packet(DECODE_MSG, plaintext, frame_len);
-    free(plaintext);
-    return 0;
-}
-
-/* La función init() ya no marca de forma especial al canal 0; se cargan las suscripciones guardadas */
-void init(void) {
-    int ret;
-    flash_simple_init();
-    flash_simple_read(FLASH_STATUS_ADDR, &decoder_status, sizeof(flash_entry_t));
-    if (decoder_status.first_boot != FLASH_FIRST_BOOT) {
-        print_debug("First boot.  Setting flash...\n");
-        decoder_status.first_boot = FLASH_FIRST_BOOT;
-        channel_status_t subscription[MAX_CHANNEL_COUNT];
-        for (int i = 0; i < MAX_CHANNEL_COUNT; i++) {
-            subscription[i].start_timestamp = DEFAULT_CHANNEL_TIMESTAMP;
-            subscription[i].end_timestamp = DEFAULT_CHANNEL_TIMESTAMP;
-            subscription[i].active = false;
-        }
-        /* Ya no se fuerza la suscripción del canal 0, se dejará a la suscripción normal */
-        memcpy(decoder_status.subscribed_channels, subscription, MAX_CHANNEL_COUNT * sizeof(channel_status_t));
-        flash_simple_erase_page(FLASH_STATUS_ADDR);
-        flash_simple_write(FLASH_STATUS_ADDR, &decoder_status, sizeof(flash_entry_t));
-    }
-    ret = uart_init();
-    if (ret < 0) {
-        STATUS_LED_ERROR();
-        while (1);
-    }
-}
-
-void boot_flag(void) {
-    char flag[28];
-    char output_buf[128] = {0};
-    for (int i = 0; aseiFuengleR[i]; i++) {
-        flag[i] = deobfuscate(aseiFuengleR[i], djFIehjkklIH[i]);
-        flag[i + 1] = 0;
-    }
-    sprintf(output_buf, "Boot Reference Flag: %s\n", flag);
-    print_debug(output_buf);
-}
-
-int list_channels(void) {
-    list_response_t resp;
-    uint16_t len;
-    resp.n_channels = 0;
-    /* Se listan todos los canales suscritos */
-    for (uint32_t i = 0; i < MAX_CHANNEL_COUNT; i++) {
-        if (decoder_status.subscribed_channels[i].active) {
-            resp.channel_info[resp.n_channels].channel = decoder_status.subscribed_channels[i].id;
-            resp.channel_info[resp.n_channels].start = decoder_status.subscribed_channels[i].start_timestamp;
-            resp.channel_info[resp.n_channels].end = decoder_status.subscribed_channels[i].end_timestamp;
-            resp.n_channels++;
-        }
-    }
-    len = sizeof(resp.n_channels) + (sizeof(channel_info_t) * resp.n_channels);
-    write_packet(LIST_MSG, &resp, len);
-    return 0;
-}
-
-int main(void) {
-    char output_buf[128] = {0};
-    uint8_t uart_buf[100];
-    msg_type_t cmd;
-    int result;
-    uint16_t pkt_len;
-    init();
-    print_debug("Decoder Booted!\n");
-    while (1) {
-        print_debug("Ready\n");
-        STATUS_LED_GREEN();
-        result = read_packet(&cmd, uart_buf, &pkt_len);
-        if (result < 0) {
-            STATUS_LED_ERROR();
-            print_error("Failed to receive cmd from host\n");
-            continue;
-        }
-        switch (cmd) {
-            case LIST_MSG:
-                STATUS_LED_CYAN();
-    #ifdef CRYPTO_EXAMPLE
-                crypto_example();
-    #endif
-                boot_flag();
-                list_channels();
-                break;
-            case DECODE_MSG:
-                STATUS_LED_PURPLE();
-                decode(pkt_len, (frame_packet_t *)uart_buf);
-                break;
-            case SUBSCRIBE_MSG:
-                STATUS_LED_YELLOW();
-                update_subscription(pkt_len, (subscription_update_packet_t *)uart_buf);
-                break;
-            default:
-                STATUS_LED_ERROR();
-                sprintf(output_buf, "Invalid Command: %c\n", cmd);
-                print_error(output_buf);
-                break;
-        }
-    }
-}
+ #include <stdio.h>
+ #include <stdint.h>
+ #include <string.h>
+ #include <wolfssl/wolfcrypt/aes.h>
+ #include <wolfssl/wolfcrypt/hmac.h>
+ #include <wolfssl/wolfcrypt/random.h>
+ 
+ #include "mxc_device.h"
+ #include "status_led.h"
+ #include "board.h"
+ #include "mxc_delay.h"
+ #include "simple_flash.h"
+ #include "host_messaging.h"
+ #include "simple_uart.h"
+ 
+ #define MAX_CHANNEL_COUNT 8
+ #define EMERGENCY_CHANNEL 0
+ #define FRAME_SIZE 64
+ #define DEFAULT_CHANNEL_TIMESTAMP 0xFFFFFFFFFFFFFFFF
+ #define FLASH_FIRST_BOOT 0xDEADBEEF
+ #define HMAC_SIZE 32
+ #define NONCE_SIZE 20
+ #define KEY_SIZE 32
+ 
+ #pragma pack(push, 1)
+ typedef struct {
+     channel_id_t channel;
+     timestamp_t timestamp;
+     uint8_t encrypted_frame[FRAME_SIZE];
+     uint8_t mac[HMAC_SIZE];
+     uint64_t seq_num;
+ } secure_frame_packet_t;
+ 
+ typedef struct {
+     channel_id_t channel;
+     decoder_id_t decoder_id;
+     timestamp_t start_timestamp;
+     timestamp_t end_timestamp;
+     uint8_t hmac[HMAC_SIZE];
+ } secure_subscription_update_packet_t;
+ 
+ typedef struct {
+     uint8_t master_key[KEY_SIZE];
+     uint8_t channel_keys[MAX_CHANNEL_COUNT][KEY_SIZE];
+     uint8_t mac_key[KEY_SIZE];
+ } secure_secrets_t;
+ 
+ typedef struct {
+     bool active;
+     channel_id_t id;
+     timestamp_t start_timestamp;
+     timestamp_t end_timestamp;
+     uint64_t last_seq_num;
+ } secure_channel_status_t;
+ 
+ typedef struct {
+     uint32_t first_boot;
+     secure_channel_status_t subscribed_channels[MAX_CHANNEL_COUNT];
+     secure_secrets_t secrets;
+ } secure_flash_entry_t;
+ #pragma pack(pop)
+ 
+ secure_flash_entry_t decoder_status;
+ WC_RNG rng;
+ 
+ int verify_subscription_hmac(secure_subscription_update_packet_t *update) {
+     Hmac hmac;
+     uint8_t computed_hmac[HMAC_SIZE];
+     
+     wc_HmacInit(&hmac, NULL, INVALID_DEVID);
+     wc_HmacSetKey(&hmac, SHA256, decoder_status.secrets.mac_key, KEY_SIZE);
+     wc_HmacUpdate(&hmac, (uint8_t*)update, sizeof(secure_subscription_update_packet_t) - HMAC_SIZE);
+     wc_HmacFinal(&hmac, computed_hmac);
+     
+     return memcmp(computed_hmac, update->hmac, HMAC_SIZE) == 0;
+ }
+ 
+ int is_subscribed(channel_id_t channel, timestamp_t timestamp) {
+     if (channel == EMERGENCY_CHANNEL) return 1;
+     
+     for (int i = 0; i < MAX_CHANNEL_COUNT; i++) {
+         if (decoder_status.subscribed_channels[i].id == channel && 
+             decoder_status.subscribed_channels[i].active &&
+             timestamp >= decoder_status.subscribed_channels[i].start_timestamp &&
+             timestamp <= decoder_status.subscribed_channels[i].end_timestamp) {
+             return 1;
+         }
+     }
+     return 0;
+ }
+ 
+ int update_subscription(pkt_len_t pkt_len, secure_subscription_update_packet_t *update) {
+     if (update->channel == EMERGENCY_CHANNEL) {
+         STATUS_LED_RED();
+         print_error("Failed to update subscription - cannot subscribe to emergency channel\n");
+         return -1;
+     }
+     
+     if (!verify_subscription_hmac(update)) {
+         STATUS_LED_RED();
+         print_error("Subscription HMAC verification failed\n");
+         return -1;
+     }
+     
+     for (int i = 0; i < MAX_CHANNEL_COUNT; i++) {
+         if (decoder_status.subscribed_channels[i].id == update->channel || 
+             !decoder_status.subscribed_channels[i].active) {
+             decoder_status.subscribed_channels[i].active = true;
+             decoder_status.subscribed_channels[i].id = update->channel;
+             decoder_status.subscribed_channels[i].start_timestamp = update->start_timestamp;
+             decoder_status.subscribed_channels[i].end_timestamp = update->end_timestamp;
+             decoder_status.subscribed_channels[i].last_seq_num = 0;
+             break;
+         }
+     }
+     
+     flash_simple_erase_page(FLASH_STATUS_ADDR);
+     flash_simple_write(FLASH_STATUS_ADDR, &decoder_status, sizeof(secure_flash_entry_t));
+     
+     write_packet(SUBSCRIBE_MSG, NULL, 0);
+     return 0;
+ }
+ 
+ int decode(pkt_len_t pkt_len, secure_frame_packet_t *new_frame) {
+     Hmac hmac;
+     Aes aes;
+     uint8_t computed_mac[HMAC_SIZE];
+     uint8_t decrypted_frame[FRAME_SIZE];
+     uint8_t nonce[NONCE_SIZE];
+     uint8_t *channel_key;
+     
+     // Verify channel subscription and timestamp
+     if (!is_subscribed(new_frame->channel, new_frame->timestamp)) {
+         STATUS_LED_RED();
+         print_error("Unsubscribed channel or invalid timestamp\n");
+         return -1;
+     }
+     
+     // Verify MAC
+     wc_HmacInit(&hmac, NULL, INVALID_DEVID);
+     wc_HmacSetKey(&hmac, SHA256, decoder_status.secrets.mac_key, KEY_SIZE);
+     wc_HmacUpdate(&hmac, (uint8_t*)new_frame, sizeof(secure_frame_packet_t) - HMAC_SIZE);
+     wc_HmacFinal(&hmac, computed_mac);
+     
+     if (memcmp(computed_mac, new_frame->mac, HMAC_SIZE) != 0) {
+         STATUS_LED_RED();
+         print_error("Frame MAC verification failed\n");
+         return -1;
+     }
+     
+     // Check sequence number to prevent replay
+     for (int i = 0; i < MAX_CHANNEL_COUNT; i++) {
+         if (decoder_status.subscribed_channels[i].id == new_frame->channel) {
+             if (new_frame->seq_num <= decoder_status.subscribed_channels[i].last_seq_num) {
+                 STATUS_LED_RED();
+                 print_error("Replay attack detected\n");
+                 return -1;
+             }
+             decoder_status.subscribed_channels[i].last_seq_num = new_frame->seq_num;
+             break;
+         }
+     }
+     
+     // Select channel key (emergency or specific channel)
+     channel_key = (new_frame->channel == EMERGENCY_CHANNEL) ? 
+         decoder_status.secrets.master_key : 
+         decoder_status.secrets.channel_keys[new_frame->channel - 1];
+     
+     // Prepare nonce
+     memcpy(nonce, &new_frame->channel, sizeof(channel_id_t));
+     memcpy(nonce + sizeof(channel_id_t), &new_frame->timestamp, sizeof(timestamp_t));
+     memcpy(nonce + sizeof(channel_id_t) + sizeof(timestamp_t), &new_frame->seq_num, sizeof(uint64_t));
+     
+     // Decrypt frame
+     wc_AesInit(&aes, NULL, INVALID_DEVID);
+     wc_AesSetKey(&aes, channel_key, KEY_SIZE, nonce, AES_ENCRYPTION);
+     wc_AesCtrEncrypt(&aes, decrypted_frame, new_frame->encrypted_frame, FRAME_SIZE);
+     wc_AesFree(&aes);
+     
+     // Write decrypted frame
+     write_packet(DECODE_MSG, decrypted_frame, FRAME_SIZE);
+     return 0;
+ }
+ 
+ void init() {
+     int ret;
+     
+     // Initialize WolfSSL RNG
+     wc_InitRng(&rng);
+     
+     flash_simple_init();
+     
+     flash_simple_read(FLASH_STATUS_ADDR, &decoder_status, sizeof(secure_flash_entry_t));
+     if (decoder_status.first_boot != FLASH_FIRST_BOOT) {
+         decoder_status.first_boot = FLASH_FIRST_BOOT;
+         
+         // Initialize channel statuses
+         memset(decoder_status.subscribed_channels, 0, sizeof(decoder_status.subscribed_channels));
+         
+         // Zero out secrets
+         memset(&decoder_status.secrets, 0, sizeof(secure_secrets_t));
+         
+         flash_simple_erase_page(FLASH_STATUS_ADDR);
+         flash_simple_write(FLASH_STATUS_ADDR, &decoder_status, sizeof(secure_flash_entry_t));
+     }
+     
+     ret = uart_init();
+     if (ret < 0) {
+         STATUS_LED_ERROR();
+         while (1);
+     }
+ }
+ 
+ int main(void) {
+     uint8_t uart_buf[sizeof(secure_frame_packet_t)];
+     msg_type_t cmd;
+     int result;
+     uint16_t pkt_len;
+ 
+     init();
+ 
+     print_debug("Secure Decoder Booted!\n");
+ 
+     while (1) {
+         print_debug("Ready\n");
+         STATUS_LED_GREEN();
+ 
+         result = read_packet(&cmd, uart_buf, &pkt_len);
+         if (result < 0) {
+             STATUS_LED_ERROR();
+             print_error("Failed to receive cmd from host\n");
+             continue;
+         }
+ 
+         switch (cmd) {
+         case LIST_MSG:
+             STATUS_LED_CYAN();
+             list_channels();
+             break;
+ 
+         case DECODE_MSG:
+             STATUS_LED_PURPLE();
+             decode(pkt_len, (secure_frame_packet_t *)uart_buf);
+             break;
+ 
+         case SUBSCRIBE_MSG:
+             STATUS_LED_YELLOW();
+             update_subscription(pkt_len, (secure_subscription_update_packet_t *)uart_buf);
+             break;
+ 
+         default:
+             STATUS_LED_ERROR();
+             print_error("Invalid Command\n");
+             break;
+         }
+     }
+ }
