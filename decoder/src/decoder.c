@@ -1,8 +1,7 @@
 /**
  * @file    decoder.c
  * @brief   Implementación segura del Decoder para eCTF.
- *          Se incorpora validación de HMAC (para canales distintos de emergencia)
- *          y descifrado con AES-CTR.
+ *          Se incorpora validación de HMAC (para todos los canales) y descifrado con AES-CTR.
  * @date    2025
  *
  * NOTA: Las funciones de entrada/salida (read_packet, write_packet, print_debug, print_error, etc.)
@@ -30,8 +29,6 @@ int encrypt_sym(uint8_t *plaintext, size_t len, uint8_t *key, uint8_t *ciphertex
 #include "host_messaging.h"
 #include "simple_uart.h"
 #include "simple_crypto.h"  /* Proporciona BLOCK_SIZE */
-
-/* No se redefine AES_BLOCK_SIZE; se usa el definido en simple_crypto.h o wolfSSL */
 
 /* Definiciones de FLASH_STATUS_ADDR (si no se definen en los headers del SDK) */
 #ifndef MXC_FLASH_MEM_BASE
@@ -94,7 +91,7 @@ int wc_AesCmac(const uint8_t *key, int keyLen, const uint8_t *data, int dataLen,
     if (K1[0] & 0x80)
         K2[AES_BLOCK_SIZE - 1] ^= 0x87;
     int num_blocks = (dataLen + AES_BLOCK_SIZE - 1) / AES_BLOCK_SIZE;
-    uint8_t X[AES_BLOCK_SIZE] = {0}; /* Inicializado en cero */
+    uint8_t X[AES_BLOCK_SIZE] = {0};
     uint8_t block[AES_BLOCK_SIZE] = {0};
     for (int i = 0; i < num_blocks; i++) {
         int offset = i * AES_BLOCK_SIZE;
@@ -159,6 +156,8 @@ typedef struct {
 flash_entry_t decoder_status;
 
 /* ------------------ FUNCIONES CRIPTOGRÁFICAS ------------------ */
+
+/* AES-CTR implementado con encrypt_sym() usando BLOCK_SIZE definido en simple_crypto.h */
 void aes_ctr_crypt(const uint8_t *key, const uint8_t *nonce, 
                    const uint8_t *in, uint8_t *out, uint32_t length) {
     uint8_t counter[BLOCK_SIZE];
@@ -200,9 +199,6 @@ int get_K_mac(uint8_t *key_out) {
 
 /* ------------------ FUNCIONES DEL DECODER ------------------ */
 int is_subscribed(uint32_t channel) {
-    /* El canal de emergencia siempre se considera suscrito */
-    if (channel == EMERGENCY_CHANNEL)
-        return 1;
     for (int i = 0; i < MAX_CHANNEL_COUNT; i++) {
         if (decoder_status.subscribed_channels[i].id == channel &&
             decoder_status.subscribed_channels[i].active)
@@ -211,7 +207,7 @@ int is_subscribed(uint32_t channel) {
     return 0;
 }
 
-/* compute_subscription_hmac se usa solo para canales distintos de emergencia */
+/* compute_subscription_hmac se calcula para todos los canales, incluido el 0 */
 void compute_subscription_hmac(const subscription_update_packet_t *sub, uint8_t *out_hmac) {
     uint8_t channel_key[16];
     get_channel_key(sub->channel, channel_key);
@@ -224,11 +220,6 @@ void compute_subscription_hmac(const subscription_update_packet_t *sub, uint8_t 
 }
 
 int update_subscription(uint16_t pkt_len, subscription_update_packet_t *update) {
-    if (update->channel == EMERGENCY_CHANNEL) {
-        STATUS_LED_RED();
-        print_error("Failed to update subscription - cannot subscribe to emergency channel\n");
-        return -1;
-    }
     uint8_t computed_hmac[16];
     compute_subscription_hmac(update, computed_hmac);
     if (memcmp(computed_hmac, update->hmac, 16) != 0) {
@@ -271,9 +262,8 @@ int decode(uint16_t pkt_len, frame_packet_t *new_frame) {
     uint8_t header[12];
     memcpy(header, &channel, 4);
     memcpy(header + 4, &timestamp, 8);
-    /* Para canales distintos de emergencia se verifica el HMAC.
-       Para canal 0 se omite la verificación. */
-    if (channel != EMERGENCY_CHANNEL) {
+    /* Siempre se verifica el HMAC, sin importar el canal */
+    {
         uint8_t K_mac[16];
         get_K_mac(K_mac);
         uint8_t computed_hmac[16];
@@ -325,7 +315,7 @@ int decode(uint16_t pkt_len, frame_packet_t *new_frame) {
     return 0;
 }
 
-/* En init() ahora se marca el canal de emergencia como suscrito de forma predeterminada */
+/* La función init() ya no marca de forma especial al canal 0; se cargan las suscripciones guardadas */
 void init(void) {
     int ret;
     flash_simple_init();
@@ -339,11 +329,7 @@ void init(void) {
             subscription[i].end_timestamp = DEFAULT_CHANNEL_TIMESTAMP;
             subscription[i].active = false;
         }
-        /* Marcar el canal 0 (emergencia) como suscrito por defecto */
-        subscription[0].active = true;
-        subscription[0].id = EMERGENCY_CHANNEL;
-        subscription[0].start_timestamp = 0;
-        subscription[0].end_timestamp = DEFAULT_CHANNEL_TIMESTAMP;
+        /* Ya no se fuerza la suscripción del canal 0, se dejará a la suscripción normal */
         memcpy(decoder_status.subscribed_channels, subscription, MAX_CHANNEL_COUNT * sizeof(channel_status_t));
         flash_simple_erase_page(FLASH_STATUS_ADDR);
         flash_simple_write(FLASH_STATUS_ADDR, &decoder_status, sizeof(flash_entry_t));
@@ -370,14 +356,9 @@ int list_channels(void) {
     list_response_t resp;
     uint16_t len;
     resp.n_channels = 0;
-    /* Siempre se reporta el canal de emergencia */
-    resp.channel_info[resp.n_channels].channel = EMERGENCY_CHANNEL;
-    resp.channel_info[resp.n_channels].start = 0;
-    resp.channel_info[resp.n_channels].end = DEFAULT_CHANNEL_TIMESTAMP;
-    resp.n_channels++;
+    /* Se listan todos los canales suscritos */
     for (uint32_t i = 0; i < MAX_CHANNEL_COUNT; i++) {
-        if (decoder_status.subscribed_channels[i].active &&
-            decoder_status.subscribed_channels[i].id != EMERGENCY_CHANNEL) {
+        if (decoder_status.subscribed_channels[i].active) {
             resp.channel_info[resp.n_channels].channel = decoder_status.subscribed_channels[i].id;
             resp.channel_info[resp.n_channels].start = decoder_status.subscribed_channels[i].start_timestamp;
             resp.channel_info[resp.n_channels].end = decoder_status.subscribed_channels[i].end_timestamp;
