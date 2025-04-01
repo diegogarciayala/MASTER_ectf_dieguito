@@ -18,8 +18,7 @@
  #include "host_messaging.h"
  #include "simple_uart.h"
  
- /* Incluir el header generado con las claves */
- #include "secrets.h"
+
  
  /* Definitions for types and constants */
  #define MAX_CHANNEL_COUNT 8

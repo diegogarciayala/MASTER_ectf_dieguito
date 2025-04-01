@@ -29,7 +29,7 @@ IPATH+=inc/
 IPATH+=wolfssl
 VPATH+=src/
 IPATH += wolfssl/wolfcrypt/src
-IPATH += include
+#IPATH += include
 
 
 
