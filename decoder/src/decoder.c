@@ -56,9 +56,10 @@
 #pragma pack(push, 1)
 typedef struct {
     uint32_t channel;
-    uint64_t timestamp;
-    uint8_t  data[FRAME_SIZE]; // 8 bytes de frame
-} frame_packet_t;
+    uint32_t encoder_id;  // <--- Nuevo campo
+    uint32_t start_timestamp;
+    uint32_t end_timestamp;
+} subscription_update_packet_t;
 
 /* Se ha modificado la estructura para que contenga 32 bits para los timestamps */
 typedef struct {
@@ -419,11 +420,9 @@ int update_subscription(uint16_t pkt_len, subscription_update_packet_t *update) 
             decoder_status.subscribed_channels[i].id == update->channel)
         {
             decoder_status.subscribed_channels[i].active = true;
-            decoder_status.subscribed_channels[i].id = update->channel;
-            // Convertir explícitamente a 32 bits
-            // decoder.c (en update_subscription)
-						decoder_status.subscribed_channels[i].start_timestamp = update->start_timestamp;  // uint32_t
-						decoder_status.subscribed_channels[i].end_timestamp = update->end_timestamp;       // uint32_t
+						decoder_status.subscribed_channels[i].id = update->channel;
+						decoder_status.subscribed_channels[i].start_timestamp = update->start_timestamp;  // Ahora correcto
+						decoder_status.subscribed_channels[i].end_timestamp = update->end_timestamp;      // Ahora correcto
             break;
         }
     }
