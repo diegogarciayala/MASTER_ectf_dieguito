@@ -33,7 +33,7 @@
 #define HEADER_SIZE      20
 
 /* Suscripción(52) = 36 +16 cmac => SUBS_DATA_SIZE=36, SUBS_MAC_SIZE=16 */
-#define SUBS_DATA_SIZE   36
+#define SUBS_DATA_SIZE   16
 #define SUBS_MAC_SIZE    16
 #define SUBS_TOTAL_SIZE  (SUBS_DATA_SIZE + SUBS_MAC_SIZE) // 52
 
@@ -297,14 +297,16 @@ static int secure_process_packet(const uint8_t* packet, size_t packet_len,
     fflush(stdout);
 
     // Extraer suscripción y validar CMAC
-    const uint8_t* subs_data = packet + HEADER_SIZE;  
-    const uint8_t* subs_mac  = subs_data + SUBS_DATA_SIZE; 
-
+    const uint8_t* subs_data = packet + HEADER_SIZE;  // Primeros 16 bytes
+		const uint8_t* subs_mac = subs_data + SUBS_DATA_SIZE;  // Siguientes 16 bytes
     uint8_t calc_mac[16];
-    if (aes_cmac(g_channel_key, 16, subs_data, SUBS_DATA_SIZE, calc_mac) != 0) {
-        fprintf(stderr, "[decoder]  ERROR: CMAC de suscripción falló\n");
-        return -1;
-    }
+    aes_cmac(g_channel_key, 16, subs_data, SUBS_DATA_SIZE, calc_mac);
+
+		// Comparar
+		if (memcmp(calc_mac, subs_mac, 16) != 0) {
+		    print_error("CMAC inválido\n");
+		    return -1;
+		}
     if (memcmp(calc_mac, subs_mac, 16) != 0) {
         fprintf(stderr, "[decoder] ERROR: CMAC inválido, posible manipulación\n");
         return -1;
@@ -419,8 +421,9 @@ int update_subscription(uint16_t pkt_len, subscription_update_packet_t *update) 
             decoder_status.subscribed_channels[i].active = true;
             decoder_status.subscribed_channels[i].id = update->channel;
             // Convertir explícitamente a 32 bits
-            decoder_status.subscribed_channels[i].start_timestamp = (uint32_t) update->start_timestamp;
-            decoder_status.subscribed_channels[i].end_timestamp   = (uint32_t) update->end_timestamp;
+            // decoder.c (en update_subscription)
+						decoder_status.subscribed_channels[i].start_timestamp = update->start_timestamp;  // uint32_t
+						decoder_status.subscribed_channels[i].end_timestamp = update->end_timestamp;       // uint32_t
             break;
         }
     }

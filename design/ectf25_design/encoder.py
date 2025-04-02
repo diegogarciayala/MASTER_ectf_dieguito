@@ -189,12 +189,17 @@ class Encoder:
         header = struct.pack("<I I I Q", seq, channel, self.encoder_id, timestamp)
 
         # 6) Nueva suscripción con start_time y end_time
-        start_time = 123456789  # Debería venir de algún parámetro
-        end_time = 387654321    # Debería venir de algún parámetro
+        start_time = 123456789  # Valor de 32 bits
+        end_time = 387654321  # Valor de 32 bits
 
-        subscription_fields = struct.pack("<IQQ", channel, start_time, end_time)
+        subscription_fields = struct.pack("<IIII",
+                                          channel,
+                                          self.encoder_id,
+                                          start_time & 0xFFFFFFFF,  # Truncar a 32 bits
+                                          end_time & 0xFFFFFFFF  # Truncar a 32 bits
+                                          )  # 16 bytes
         mac_16 = aes_cmac(K_channel, subscription_fields)
-        subscription32 = subscription_fields + mac_16  # Total: 32 bytes
+        subscription32 = subscription_fields + mac_16  # 32 bytes (16 + 16)
 
         # 7) Paquete final
         packet = header + subscription32 + ciph_24
