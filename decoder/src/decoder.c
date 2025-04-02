@@ -59,7 +59,7 @@ typedef struct {
     uint32_t encoder_id;  // <--- Nuevo campo
     uint32_t start_timestamp;
     uint32_t end_timestamp;
-} subscription_update_packet_t;
+} frame_packet_t;
 
 /* Se ha modificado la estructura para que contenga 32 bits para los timestamps */
 typedef struct {
