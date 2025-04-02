@@ -55,11 +55,12 @@
 /* Estructuras de eCTF host messaging */
 #pragma pack(push, 1)
 typedef struct {
-    uint32_t channel;
-    uint32_t encoder_id;  // <--- Nuevo campo
-    uint32_t start_timestamp;
-    uint32_t end_timestamp;
-} frame_packet_t;
+    uint32_t channel;          // 4 bytes
+    uint32_t encoder_id;       // 4 bytes (nuevo campo)
+    uint32_t start_timestamp;  // 4 bytes
+    uint32_t end_timestamp;    // 4 bytes
+} subscription_update_packet_t;
+#pragma pack(pop)
 
 /* Se ha modificado la estructura para que contenga 32 bits para los timestamps */
 typedef struct {
@@ -421,8 +422,9 @@ int update_subscription(uint16_t pkt_len, subscription_update_packet_t *update) 
         {
             decoder_status.subscribed_channels[i].active = true;
 						decoder_status.subscribed_channels[i].id = update->channel;
-						decoder_status.subscribed_channels[i].start_timestamp = update->start_timestamp;  // Ahora correcto
-						decoder_status.subscribed_channels[i].end_timestamp = update->end_timestamp;      // Ahora correcto
+						decoder_status.subscribed_channels[i].start_timestamp = update->start_timestamp;  // Campo correcto
+						decoder_status.subscribed_channels[i].end_timestamp = update->end_timestamp;      // Campo correcto
+
             break;
         }
     }

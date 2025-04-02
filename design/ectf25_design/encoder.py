@@ -196,8 +196,8 @@ class Encoder:
             "<IIII",
             channel,
             self.encoder_id,
-            start_time & 0xFFFFFFFF,  # Truncar a 32 bits
-            end_time & 0xFFFFFFFF  # Truncar a 32 bits
+            start_time & 0xFFFFFFFF,  # 32 bits
+            end_time & 0xFFFFFFFF  # 32 bits
         )
         mac_16 = aes_cmac(K_channel, subscription_fields)
         subscription32 = subscription_fields + mac_16  # 32 bytes (16 + 16)
