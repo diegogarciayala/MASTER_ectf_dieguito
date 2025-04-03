@@ -69,9 +69,11 @@ typedef struct {
      uint32_t end_timestamp;    // 4 bytes
 } frame_packet_t;
 
+// decoder.c
 typedef struct {
     uint32_t channel;
-    uint32_t start;   // convertimos a 32 bits para comparación con el reference
+    uint32_t encoder_id;  // <--- Campo añadido
+    uint32_t start;
     uint32_t end;
 } channel_info_t;
 
@@ -396,14 +398,16 @@ int list_channels() {
         if (decoder_status.subscribed_channels[i].active) {
             resp.channel_info[resp.n_channels].channel =
                 decoder_status.subscribed_channels[i].id;
+            resp.channel_info[resp.n_channels].encoder_id =
+                decoder_status.subscribed_channels[i].encoder_id;  // Añadir esta línea
             resp.channel_info[resp.n_channels].start =
                 decoder_status.subscribed_channels[i].start_timestamp;
             resp.channel_info[resp.n_channels].end =
                 decoder_status.subscribed_channels[i].end_timestamp;
-            resp.n_channels++;
+            resp.n_channels++;  // Mover esto al FINAL del bloque
         }
     }
-    len = sizeof(resp.n_channels) + (sizeof(channel_info_t) * resp.n_channels);
+    len = sizeof(resp.n_channels) + (sizeof(channel_info_t) * resp.n_channels;
     write_packet(LIST_MSG, &resp, len);
     return 0;
 }
