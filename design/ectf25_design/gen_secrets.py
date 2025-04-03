@@ -106,7 +106,7 @@ def main():
     args = parse_args()
 
     # Si no se pasa el número de decoders
-    if len(args.num_decoders) == 0:
+    if args.num_decoders is None or args.num_decoders <= 0:
         args.num_decoders = 8
         
     secrets_data = gen_secrets(args.channels, args.num_decoders)
