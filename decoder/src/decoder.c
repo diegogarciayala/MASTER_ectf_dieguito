@@ -32,18 +32,18 @@
 /* Header(20) = seq(4) + channel(4) + encoder_id(4) + ts_ext(8) */
 #define HEADER_SIZE      20
 
-/* Suscripción(52) = 36 +16 cmac => SUBS_DATA_SIZE=36, SUBS_MAC_SIZE=16 */
+/* Suscripción (32 bytes) = 16 bytes de datos + 16 bytes de CMAC */
 #define SUBS_DATA_SIZE   16
 #define SUBS_MAC_SIZE    16
-#define SUBS_TOTAL_SIZE  (SUBS_DATA_SIZE + SUBS_MAC_SIZE) // 52
+#define SUBS_TOTAL_SIZE  (SUBS_DATA_SIZE + SUBS_MAC_SIZE) // 32 bytes
 
 /* Frame(8) + trailer(16) = 24 ciphertext */
 #define FRAME_SIZE       8
 #define TRAILER_SIZE     16
 #define CIPHER_SIZE      (FRAME_SIZE + TRAILER_SIZE) // 24
 
-/* Tamaño total del paquete esperado = 20 + 52 + 24 = 96 bytes */
-#define PACKET_MIN_SIZE  (HEADER_SIZE + SUBS_TOTAL_SIZE + CIPHER_SIZE) // 96
+/* Tamaño total del paquete esperado = 20 + 32 + 24 = 76 bytes */
+#define PACKET_MIN_SIZE  (HEADER_SIZE + SUBS_TOTAL_SIZE + CIPHER_SIZE) // 76 bytes
 
 /* eCTF Subscriptions in flash */
 #define MAX_CHANNEL_COUNT 8
@@ -304,30 +304,35 @@ static int secure_process_packet(const uint8_t* packet, size_t packet_len,
     const uint8_t* subs_data = packet + HEADER_SIZE;  // Primeros 16 bytes
 		const uint8_t* subs_mac = subs_data + SUBS_DATA_SIZE;  // Siguientes 16 bytes
     uint8_t calc_mac[16];
-    aes_cmac(g_channel_key, 16, subs_data, SUBS_DATA_SIZE, calc_mac);
 
-		// Comparar
+    aes_cmac(g_channel_key, 16, subs_data, SUBS_DATA_SIZE, calc_mac);
 		if (memcmp(calc_mac, subs_mac, 16) != 0) {
-		    print_error("CMAC inválido\n");
-		    return -1;
+      fprintf(stderr, "[decoder] ERROR: CMAC inválido, posible manipulación\n");
+    return -1;
 		}
-    if (memcmp(calc_mac, subs_mac, 16) != 0) {
-        fprintf(stderr, "[decoder] ERROR: CMAC inválido, posible manipulación\n");
-        return -1;
-    }
+
     printf("[decoder]  CMAC de suscripción válido\n");
     fflush(stdout);
 
-    // Derivar clave dinámica y descifrar
-    uint8_t dynamic_key[16];
-    uint8_t seq_channel[8];
-    memcpy(seq_channel, &seq, 4);
-    memcpy(seq_channel+4, &channel, 4);
+    uint8_t K1[16];
+		uint8_t dynamic_key[16];
+		uint8_t seq_channel[8];
+		memcpy(seq_channel, &seq, 4);
+		memcpy(seq_channel + 4, &channel, 4);
 
-    if (aes_cmac(g_channel_key, 16, seq_channel, 8, dynamic_key) != 0) {
-        fprintf(stderr, "[decoder]  ERROR: No se pudo derivar dynamic_key\n");
-        return -1;
-    }
+		/* Paso 1: Derivar K1 con el literal "K1-Derivation" */
+		if (aes_cmac(g_channel_key, 16, (const uint8_t*)"K1-Derivation", 13, K1) != 0) {
+		    fprintf(stderr, "[decoder] ERROR: No se pudo derivar K1\n");
+		    return -1;
+		}
+
+		/* Paso 2: Derivar dynamic_key a partir de [seq, channel] en LE */
+		if (aes_cmac(K1, 16, seq_channel, 8, dynamic_key) != 0) {
+		    fprintf(stderr, "[decoder] ERROR: No se pudo derivar dynamic_key\n");
+		    return -1;
+		}
+
+
     printf("[decoder]  Clave derivada correctamente\n");
     fflush(stdout);
 
@@ -407,7 +412,7 @@ int list_channels() {
             resp.n_channels++;  // Mover esto al FINAL del bloque
         }
     }
-    len = sizeof(resp.n_channels) + (sizeof(channel_info_t) * resp.n_channels;
+    len = sizeof(resp.n_channels) + (sizeof(channel_info_t) * resp.n_channels);
     write_packet(LIST_MSG, &resp, len);
     return 0;
 }
